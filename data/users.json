@@ -19,6 +19,11 @@
       "email": "micr0@micr0.dev",
       "token": "5DYzZxtIjrJKFhPdcZ9H_HsAfcbkSITCYuWjBTOxM3c=",
       "expires_at": "2025-10-14T02:47:18.436796343-04:00"
+    },
+    "kYIWmEKtbS7Z69itC9OwlBxYR1HS_yFWx4k9ROXMNwQ=": {
+      "email": "micr0@micr0.dev",
+      "token": "kYIWmEKtbS7Z69itC9OwlBxYR1HS_yFWx4k9ROXMNwQ=",
+      "expires_at": "2025-10-14T03:05:15.804796566-04:00"
     }
   }
 }
