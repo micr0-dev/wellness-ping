@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -91,8 +92,9 @@ func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	store.mu.Unlock()
 
-	body := fmt.Sprintf("Subject: Wellness Ping Verification Code\n\nYour verification code is: %s\n\nThis code expires in 10 minutes.", code)
-	sendEmail(email, body)
+	subject := "Wellness Ping Verification Code"
+	body := fmt.Sprintf("Your verification code is: %s\n\nThis code expires in 10 minutes.", code)
+	sendEmail(email, subject, body)
 
 	data := map[string]string{"Email": email}
 	tmpl := template.Must(template.ParseFiles("templates/verify.html"))
@@ -338,31 +340,81 @@ func pingScheduler() {
 }
 
 func sendPing(user *User) {
-	link := fmt.Sprintf("http://localhost:8080/pong?token=%s", user.Token)
-	body := fmt.Sprintf("Subject: Wellness Ping\n\nHi! Just checking in.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", link)
+	link := fmt.Sprintf("https://wellness-p.ing/pong?token=%s", user.Token)
+	subject := "Wellness Ping"
+	body := fmt.Sprintf("Hi! Just checking in.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", link)
 
-	sendEmail(user.Email, body)
+	sendEmail(user.Email, subject, body)
 }
 
 func sendAlert(user *User) {
-	link := fmt.Sprintf("http://localhost:8080/pong?token=%s", user.Token)
-	body := fmt.Sprintf("Subject: Wellness Alert - %s Not Responding\n\nWARNING: %s hasn't responded to their wellness ping.\n\nIf you hear from them, they can confirm they're okay here:\n%s", user.Email, user.Email, link)
+	link := fmt.Sprintf("https://wellness-p.ing/pong?token=%s", user.Token)
+	subject := fmt.Sprintf("Wellness Alert - %s Not Responding", user.Email)
+	body := fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nIf you hear from them, they can confirm they're okay here:\n%s", user.Email, link)
 
 	for _, alertEmail := range user.AlertEmails {
-		sendEmail(alertEmail, body)
+		sendEmail(alertEmail, subject, body)
 	}
 }
 
 func sendAllClearEmail(user *User) {
-	body := fmt.Sprintf("Subject: All Clear - %s Checked In\n\nGood news! %s has now checked in and confirmed they're okay.", user.Email, user.Email)
+	subject := fmt.Sprintf("All Clear - %s Checked In", user.Email)
+	body := fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
 
 	for _, alertEmail := range user.AlertEmails {
-		sendEmail(alertEmail, body)
+		sendEmail(alertEmail, subject, body)
 	}
 }
 
-func sendEmail(to, body string) {
-	log.Printf("Sending email to %s:\n%s", to, body)
+func sendEmail(to, subject, body string) {
+	token := os.Getenv("POSTMARK_TOKEN")
+	if token == "" {
+		log.Printf("POSTMARK_TOKEN not set, would send email to %s with subject: %s and body: %s", to, subject, body)
+		return
+	}
+
+	// Convert plain text to basic HTML
+	htmlBody := strings.ReplaceAll(body, "\n", "<br>")
+
+	payload := map[string]string{
+		"From":          "ping@wellness-p.ing",
+		"To":            to,
+		"Subject":       subject,
+		"HtmlBody":      htmlBody,
+		"MessageStream": "outbound",
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshaling email data: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", "https://api.postmarkapp.com/email", strings.NewReader(string(jsonData)))
+	if err != nil {
+		log.Printf("Error creating request: %v", err)
+		return
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Postmark-Server-Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error sending email to %s: %v", to, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Error sending email to %s: %d - %s", to, resp.StatusCode, string(bodyBytes))
+		return
+	}
+
+	log.Printf("Email sent successfully to %s", to)
 }
 
 func generateCode() string {
