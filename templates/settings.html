@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Wellness Ping Settings</h1>
+    
+    {{if .User}}
+    <h3>Current Settings</h3>
+    <p><b>Email:</b> {{.User.Email}}</p>
+    <p><b>Alert Emails:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
+    <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
+    <p><b>Inactivity Alert:</b> {{.User.InactivityHours}} hours</p>
+    <br>
+    {{end}}
+    
+    <form action="/update" method="POST">
+        <input type="hidden" name="email" value="{{.Email}}">
+        
+        <label>Alert Email List (comma-separated):</label><br>
+        <input type="text" name="alert_emails" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
+        
+        <label>Ping Frequency:</label><br>
+        <select name="ping_frequency">
+            <option value="daily" {{if .User}}{{if eq .User.PingFrequency "daily"}}selected{{end}}{{end}}>Daily</option>
+            <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly"}}selected{{end}}{{end}}>Weekly</option>
+        </select><br><br>
+        
+        <label>Alert After (hours of no response):</label><br>
+        <input type="number" name="inactivity_hours" value="{{if .User}}{{.User.InactivityHours}}{{else}}24{{end}}" min="1" required><br><br>
+        
+        <button type="submit" name="action" value="save">Save Settings</button><br><br>
+        
+        {{if .User}}
+        <button type="submit" name="action" value="stop">Stop Service</button>
+        {{end}}
+    </form>
+    
+    <br>
+    <a href="/">Back to home</a>
+    
+    <hr>
+    <footer>
+        <p style="font-size: 14px; color: #666;">
+            Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> | 
+            Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a>
+        </p>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,13 @@
+body {
+    font-family: sans-serif;
+    margin: 40px;
+}
+
+input, select, button {
+    font-size: 16px;
+    padding: 5px;
+}
+
+button {
+    cursor: pointer;
+}

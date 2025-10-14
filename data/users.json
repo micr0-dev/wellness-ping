@@ -1,0 +1,24 @@
+{
+  "users": {
+    "micr0@micr0.dev": {
+      "email": "micr0@micr0.dev",
+      "alert_emails": [
+        "aaa@micr0.dev"
+      ],
+      "ping_frequency": "daily",
+      "inactivity_hours": 24,
+      "last_ping": "2025-10-14T02:17:33.002579076-04:00",
+      "active": true,
+      "token": "LLiPbnmgYCP5o6U7kDe2Bx-Jx83KwyKva7CyAwVfh2s=",
+      "alert_sent": false
+    }
+  },
+  "pending_verifications": {},
+  "sessions": {
+    "5DYzZxtIjrJKFhPdcZ9H_HsAfcbkSITCYuWjBTOxM3c=": {
+      "email": "micr0@micr0.dev",
+      "token": "5DYzZxtIjrJKFhPdcZ9H_HsAfcbkSITCYuWjBTOxM3c=",
+      "expires_at": "2025-10-14T02:47:18.436796343-04:00"
+    }
+  }
+}

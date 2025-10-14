@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Wellness Ping</h1>
+    <h2>For anyone who might go <em>missing</em></h2>
+    <p>Enter your email to get started.</p>
+    
+    <form action="/send-code" method="POST">
+        <label>Email:</label><br>
+        <input type="email" name="email" required><br><br>
+        <button type="submit">Send Verification Code</button>
+    </form>
+    <p><small>Alert your trusted contacts if you don't respond. No BS.</small></p>
+</body>
+</html>
