@@ -61,6 +61,7 @@ func main() {
 	http.HandleFunc("/settings", settingsHandler)
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/pong", pongHandler)
+	http.HandleFunc("/inbound", inboundEmailHandler)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	go pingScheduler()
@@ -415,6 +416,84 @@ func sendEmail(to, subject, body string) {
 	}
 
 	log.Printf("Email sent successfully to %s", to)
+}
+
+func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var inboundEmail struct {
+		From      string `json:"From"`
+		To        string `json:"To"`
+		Subject   string `json:"Subject"`
+		TextBody  string `json:"TextBody"`
+		HtmlBody  string `json:"HtmlBody"`
+		MessageID string `json:"MessageID"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&inboundEmail); err != nil {
+		log.Printf("Error decoding inbound email: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received inbound email from %s", inboundEmail.From)
+
+	bodyText := strings.ToLower(inboundEmail.TextBody)
+	if !strings.Contains(bodyText, "pong") {
+		log.Printf("Email from %s doesn't contain PONG, ignoring", inboundEmail.From)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	fromEmail := extractEmail(inboundEmail.From)
+	if fromEmail == "" {
+		log.Printf("Could not extract email from: %s", inboundEmail.From)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	store.mu.Lock()
+	user, exists := store.Users[fromEmail]
+	if !exists {
+		log.Printf("No user found for email: %s", fromEmail)
+		store.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	wasAlerted := user.AlertSent
+	user.LastPing = time.Now()
+	user.AlertSent = false
+	store.mu.Unlock()
+	saveStore()
+
+	log.Printf("User %s checked in via email reply", fromEmail)
+
+	if wasAlerted {
+		sendAllClearEmail(user)
+	}
+
+	sendEmail(fromEmail, "Wellness Ping Confirmed", "Thanks for checking in! We received your PONG.")
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func extractEmail(from string) string {
+	from = strings.TrimSpace(strings.ToLower(from))
+
+	if strings.Contains(from, "<") && strings.Contains(from, ">") {
+		start := strings.Index(from, "<")
+		end := strings.Index(from, ">")
+		if start != -1 && end != -1 && end > start {
+			return from[start+1 : end]
+		}
+	}
+
+	return from
 }
 
 func generateCode() string {
