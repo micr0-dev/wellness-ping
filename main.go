@@ -150,7 +150,7 @@ func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
 		Name:     "session",
 		Value:    sessionToken,
 		Path:     "/",
-		MaxAge:   1800, // 30 minutes
+		MaxAge:   1800,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
@@ -242,7 +242,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	pingFreq := r.FormValue("ping_frequency")
 
-	localHour := 9 // default
+	localHour := 9
 	if r.FormValue("checkin_hour") != "" {
 		fmt.Sscanf(r.FormValue("checkin_hour"), "%d", &localHour)
 	}
@@ -270,7 +270,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		Email:           email,
 		AlertEmails:     alertEmails,
 		PingFrequency:   pingFreq,
-		CheckInHour:     checkInHourUTC, // Store in UTC
+		CheckInHour:     checkInHourUTC,
 		LastPing:        time.Now(),
 		LastReminderNum: 0,
 		Active:          true,
@@ -327,26 +327,33 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 
 	store.mu.Lock()
-	defer store.mu.Unlock()
+	var foundUser *User
+	var wasAlerted bool
 
 	for _, user := range store.Users {
 		if user.Token == token {
-			wasAlerted := user.AlertSent
+			foundUser = user
+			wasAlerted = user.AlertSent
 			user.LastPing = time.Now()
-			user.LastReminderNum = 0 // Reset reminder counter
+			user.LastReminderNum = 0
 			user.AlertSent = false
-			saveStore()
-
-			if wasAlerted {
-				sendAllClearEmail(user)
-			}
-
-			fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
-			return
+			break
 		}
 	}
+	store.mu.Unlock()
 
-	http.Error(w, "Invalid token", http.StatusBadRequest)
+	if foundUser == nil {
+		http.Error(w, "Invalid token", http.StatusBadRequest)
+		return
+	}
+
+	saveStore()
+
+	if wasAlerted {
+		sendAllClearEmail(foundUser)
+	}
+
+	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
 }
 
 func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
@@ -389,18 +396,21 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 
 	store.mu.Lock()
 	user, exists := store.Users[fromEmail]
+	var wasAlerted bool
+	if exists {
+		wasAlerted = user.AlertSent
+		user.LastPing = time.Now()
+		user.LastReminderNum = 0
+		user.AlertSent = false
+	}
+	store.mu.Unlock()
+
 	if !exists {
 		log.Printf("No user found for email: %s", fromEmail)
-		store.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	wasAlerted := user.AlertSent
-	user.LastPing = time.Now()
-	user.LastReminderNum = 0 // Reset reminder counter
-	user.AlertSent = false
-	store.mu.Unlock()
 	saveStore()
 
 	log.Printf("User %s checked in via email reply", fromEmail)
@@ -433,6 +443,7 @@ func pingScheduler() {
 		store.mu.RUnlock()
 
 		now := time.Now()
+		needsSave := false
 
 		for _, user := range users {
 			if !user.Active {
@@ -444,10 +455,10 @@ func pingScheduler() {
 
 			if user.PingFrequency == "daily" {
 				pingInterval = 24 * time.Hour
-				reminderInterval = 6 * time.Hour // 1/4 of 24 hours
-			} else { // weekly
+				reminderInterval = 6 * time.Hour
+			} else {
 				pingInterval = 7 * 24 * time.Hour
-				reminderInterval = 24 * time.Hour // once per day
+				reminderInterval = 24 * time.Hour
 			}
 
 			timeSinceLastPing := time.Since(user.LastPing)
@@ -462,17 +473,17 @@ func pingScheduler() {
 						user.LastReminderNum = 0
 						store.mu.Unlock()
 						sendPing(user, 0)
-						saveStore()
+						needsSave = true
 						continue
 					}
 				}
-			} else { // weekly
+			} else {
 				if timeSinceLastPing >= pingInterval && now.Hour() >= user.CheckInHour {
 					store.mu.Lock()
 					user.LastReminderNum = 0
 					store.mu.Unlock()
 					sendPing(user, 0)
-					saveStore()
+					needsSave = true
 					continue
 				}
 			}
@@ -490,17 +501,21 @@ func pingScheduler() {
 					user.LastReminderNum = expectedReminderNum
 					store.mu.Unlock()
 					sendPing(user, expectedReminderNum)
-					saveStore()
+					needsSave = true
 				}
 
 				if timeSinceLastPing >= pingInterval && !user.AlertSent {
 					store.mu.Lock()
 					user.AlertSent = true
 					store.mu.Unlock()
-					saveStore()
 					sendAlert(user)
+					needsSave = true
 				}
 			}
+		}
+
+		if needsSave {
+			saveStore()
 		}
 	}
 }
