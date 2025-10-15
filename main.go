@@ -419,7 +419,7 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 		sendAllClearEmail(user)
 	}
 
-	sendReplyEmail(fromEmail, inboundEmail.MessageID, inboundEmail.Subject)
+	sendReplyEmail(fromEmail, inboundEmail.MessageID, inboundEmail.Subject, inboundEmail.TextBody)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -612,7 +612,7 @@ func sendEmail(to, subject, body string) {
 	log.Printf("Email sent successfully to %s", to)
 }
 
-func sendReplyEmail(to, inReplyTo, originalSubject string) {
+func sendReplyEmail(to, inReplyTo, originalSubject, originalBody string) {
 	token := os.Getenv("POSTMARK_TOKEN")
 	if token == "" {
 		log.Printf("POSTMARK_TOKEN not set, would send reply email to %s", to)
@@ -624,13 +624,15 @@ func sendReplyEmail(to, inReplyTo, originalSubject string) {
 		subject = "Re: " + subject
 	}
 
-	body := "Thanks for checking in! We received your PONG."
-	htmlBody := strings.ReplaceAll(body, "\n", "<br>")
+	quotedBody := strings.ReplaceAll(originalBody, "\n", "\n> ")
+	body := fmt.Sprintf("Thanks for checking in! We received your PONG.\n\n> %s", quotedBody)
+	htmlBody := fmt.Sprintf("Thanks for checking in! We received your PONG.<br><br><blockquote style='border-left: 2px solid #ccc; padding-left: 10px; color: #666;'>%s</blockquote>", strings.ReplaceAll(originalBody, "\n", "<br>"))
 
 	payload := map[string]interface{}{
 		"From":          "ping@wellness-p.ing",
 		"To":            to,
 		"Subject":       subject,
+		"TextBody":      body,
 		"HtmlBody":      htmlBody,
 		"MessageStream": "outbound",
 	}
