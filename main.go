@@ -20,8 +20,9 @@ type User struct {
 	Email           string    `json:"email"`
 	AlertEmails     []string  `json:"alert_emails"`
 	PingFrequency   string    `json:"ping_frequency"`
-	InactivityHours int       `json:"inactivity_hours"`
+	CheckInHour     int       `json:"checkin_hour"`
 	LastPing        time.Time `json:"last_ping"`
+	LastReminderNum int       `json:"last_reminder_num"`
 	Active          bool      `json:"active"`
 	Token           string    `json:"token"`
 	AlertSent       bool      `json:"alert_sent"`
@@ -62,6 +63,7 @@ func main() {
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/pong", pongHandler)
 	http.HandleFunc("/inbound", inboundEmailHandler)
+	http.HandleFunc("/test-ping", testPingHandler)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	go pingScheduler()
@@ -157,7 +159,6 @@ func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
-	// Get session from cookie
 	cookie, err := r.Cookie("session")
 	if err != nil {
 		http.Error(w, "Unauthorized - please verify your email first", http.StatusUnauthorized)
@@ -226,7 +227,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 			MaxAge: -1,
 		})
 
-		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Service Stopped</h1><p>Your wellness ping service has been stopped.</p><p><a href='/'>Go back</a></p></body></html>")
+		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Service Stopped</h1><p>Your wellness ping service has been stopped and all data deleted.</p><p><a href='/'>Go back</a></p></body></html>")
 		return
 	}
 
@@ -240,10 +241,28 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pingFreq := r.FormValue("ping_frequency")
-	inactivityHours := 24
-	if r.FormValue("inactivity_hours") != "" {
-		fmt.Sscanf(r.FormValue("inactivity_hours"), "%d", &inactivityHours)
+
+	localHour := 9 // default
+	if r.FormValue("checkin_hour") != "" {
+		fmt.Sscanf(r.FormValue("checkin_hour"), "%d", &localHour)
 	}
+
+	timezone := r.FormValue("timezone")
+	if timezone == "" {
+		timezone = "UTC"
+	}
+
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		log.Printf("Invalid timezone %s, defaulting to UTC", timezone)
+		loc = time.UTC
+	}
+
+	now := time.Now()
+	localTime := time.Date(now.Year(), now.Month(), now.Day(), localHour, 0, 0, 0, loc)
+
+	utcTime := localTime.UTC()
+	checkInHourUTC := utcTime.Hour()
 
 	token := generateToken()
 
@@ -251,8 +270,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		Email:           email,
 		AlertEmails:     alertEmails,
 		PingFrequency:   pingFreq,
-		InactivityHours: inactivityHours,
+		CheckInHour:     checkInHourUTC, // Store in UTC
 		LastPing:        time.Now(),
+		LastReminderNum: 0,
 		Active:          true,
 		Token:           token,
 		AlertSent:       false,
@@ -263,7 +283,44 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	store.mu.Unlock()
 	saveStore()
 
-	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Settings Saved</h1><p>Your wellness ping is now active!</p><p><a href='/'>Go back</a></p></body></html>")
+	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Settings Saved</h1><p>Your wellness ping is now active!</p><p>You'll receive check-ins at %d:00 %s (stored as %d:00 UTC)</p><p><a href='/settings'>Back to settings</a></p></body></html>", localHour, timezone, checkInHourUTC)
+}
+
+func testPingHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	store.mu.RLock()
+	session, exists := store.Sessions[cookie.Value]
+	store.mu.RUnlock()
+
+	if !exists || time.Now().After(session.ExpiresAt) {
+		http.Error(w, "Session expired", http.StatusUnauthorized)
+		return
+	}
+
+	email := session.Email
+
+	store.mu.RLock()
+	user := store.Users[email]
+	store.mu.RUnlock()
+
+	if user == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	sendPing(user, 0)
+
+	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Test Ping Sent!</h1><p>Check your email at %s</p><p><a href='/settings'>Back to settings</a></p></body></html>", user.Email)
 }
 
 func pongHandler(w http.ResponseWriter, r *http.Request) {
@@ -276,6 +333,7 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 		if user.Token == token {
 			wasAlerted := user.AlertSent
 			user.LastPing = time.Now()
+			user.LastReminderNum = 0 // Reset reminder counter
 			user.AlertSent = false
 			saveStore()
 
@@ -289,133 +347,6 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Invalid token", http.StatusBadRequest)
-}
-
-func pingScheduler() {
-	ticker := time.NewTicker(1 * time.Hour)
-	for range ticker.C {
-		// Clean up expired sessions
-		store.mu.Lock()
-		for token, session := range store.Sessions {
-			if time.Now().After(session.ExpiresAt) {
-				delete(store.Sessions, token)
-			}
-		}
-		store.mu.Unlock()
-
-		store.mu.RLock()
-		users := make([]*User, 0, len(store.Users))
-		for _, u := range store.Users {
-			users = append(users, u)
-		}
-		store.mu.RUnlock()
-
-		for _, user := range users {
-			if !user.Active {
-				continue
-			}
-
-			var pingInterval time.Duration
-			if user.PingFrequency == "daily" {
-				pingInterval = 24 * time.Hour
-			} else {
-				pingInterval = 7 * 24 * time.Hour
-			}
-
-			timeSinceLastPing := time.Since(user.LastPing)
-			inactivityDuration := time.Duration(user.InactivityHours) * time.Hour
-
-			if timeSinceLastPing >= pingInterval && timeSinceLastPing < pingInterval+inactivityDuration {
-				sendPing(user)
-			}
-
-			if timeSinceLastPing >= pingInterval+inactivityDuration && !user.AlertSent {
-				store.mu.Lock()
-				user.AlertSent = true
-				store.mu.Unlock()
-				saveStore()
-				sendAlert(user)
-			}
-		}
-	}
-}
-
-func sendPing(user *User) {
-	link := fmt.Sprintf("https://wellness-p.ing/pong?token=%s", user.Token)
-	subject := "Wellness Ping"
-	body := fmt.Sprintf("Hi! Just checking in.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", link)
-
-	sendEmail(user.Email, subject, body)
-}
-
-func sendAlert(user *User) {
-	link := fmt.Sprintf("https://wellness-p.ing/pong?token=%s", user.Token)
-	subject := fmt.Sprintf("Wellness Alert - %s Not Responding", user.Email)
-	body := fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nIf you hear from them, they can confirm they're okay here:\n%s", user.Email, link)
-
-	for _, alertEmail := range user.AlertEmails {
-		sendEmail(alertEmail, subject, body)
-	}
-}
-
-func sendAllClearEmail(user *User) {
-	subject := fmt.Sprintf("All Clear - %s Checked In", user.Email)
-	body := fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
-
-	for _, alertEmail := range user.AlertEmails {
-		sendEmail(alertEmail, subject, body)
-	}
-}
-
-func sendEmail(to, subject, body string) {
-	token := os.Getenv("POSTMARK_TOKEN")
-	if token == "" {
-		log.Printf("POSTMARK_TOKEN not set, would send email to %s with subject: %s and body: %s", to, subject, body)
-		return
-	}
-
-	// Convert plain text to basic HTML
-	htmlBody := strings.ReplaceAll(body, "\n", "<br>")
-
-	payload := map[string]string{
-		"From":          "ping@wellness-p.ing",
-		"To":            to,
-		"Subject":       subject,
-		"HtmlBody":      htmlBody,
-		"MessageStream": "outbound",
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("Error marshaling email data: %v", err)
-		return
-	}
-
-	req, err := http.NewRequest("POST", "https://api.postmarkapp.com/email", strings.NewReader(string(jsonData)))
-	if err != nil {
-		log.Printf("Error creating request: %v", err)
-		return
-	}
-
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Postmark-Server-Token", token)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Error sending email to %s: %v", to, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Error sending email to %s: %d - %s", to, resp.StatusCode, string(bodyBytes))
-		return
-	}
-
-	log.Printf("Email sent successfully to %s", to)
 }
 
 func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +398,7 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 
 	wasAlerted := user.AlertSent
 	user.LastPing = time.Now()
+	user.LastReminderNum = 0 // Reset reminder counter
 	user.AlertSent = false
 	store.mu.Unlock()
 	saveStore()
@@ -480,6 +412,189 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 	sendEmail(fromEmail, "Wellness Ping Confirmed", "Thanks for checking in! We received your PONG.")
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func pingScheduler() {
+	ticker := time.NewTicker(1 * time.Hour)
+	for range ticker.C {
+		store.mu.Lock()
+		for token, session := range store.Sessions {
+			if time.Now().After(session.ExpiresAt) {
+				delete(store.Sessions, token)
+			}
+		}
+		store.mu.Unlock()
+
+		store.mu.RLock()
+		users := make([]*User, 0, len(store.Users))
+		for _, u := range store.Users {
+			users = append(users, u)
+		}
+		store.mu.RUnlock()
+
+		now := time.Now()
+
+		for _, user := range users {
+			if !user.Active {
+				continue
+			}
+
+			var pingInterval time.Duration
+			var reminderInterval time.Duration
+
+			if user.PingFrequency == "daily" {
+				pingInterval = 24 * time.Hour
+				reminderInterval = 6 * time.Hour // 1/4 of 24 hours
+			} else { // weekly
+				pingInterval = 7 * 24 * time.Hour
+				reminderInterval = 24 * time.Hour // once per day
+			}
+
+			timeSinceLastPing := time.Since(user.LastPing)
+
+			if user.PingFrequency == "daily" {
+				lastPingDate := user.LastPing.Truncate(24 * time.Hour)
+				todayDate := now.Truncate(24 * time.Hour)
+
+				if todayDate.After(lastPingDate) {
+					if now.Hour() >= user.CheckInHour && user.LastReminderNum == 0 {
+						store.mu.Lock()
+						user.LastReminderNum = 0
+						store.mu.Unlock()
+						sendPing(user, 0)
+						saveStore()
+						continue
+					}
+				}
+			} else { // weekly
+				if timeSinceLastPing >= pingInterval && now.Hour() >= user.CheckInHour {
+					store.mu.Lock()
+					user.LastReminderNum = 0
+					store.mu.Unlock()
+					sendPing(user, 0)
+					saveStore()
+					continue
+				}
+			}
+
+			if timeSinceLastPing > 0 {
+				expectedReminderNum := int(timeSinceLastPing / reminderInterval)
+
+				maxReminders := 3
+				if user.PingFrequency == "weekly" {
+					maxReminders = 6
+				}
+
+				if expectedReminderNum > user.LastReminderNum && expectedReminderNum <= maxReminders {
+					store.mu.Lock()
+					user.LastReminderNum = expectedReminderNum
+					store.mu.Unlock()
+					sendPing(user, expectedReminderNum)
+					saveStore()
+				}
+
+				if timeSinceLastPing >= pingInterval && !user.AlertSent {
+					store.mu.Lock()
+					user.AlertSent = true
+					store.mu.Unlock()
+					saveStore()
+					sendAlert(user)
+				}
+			}
+		}
+	}
+}
+
+func sendPing(user *User, reminderNum int) {
+	link := fmt.Sprintf("https://wellness-p.ing/pong?token=%s", user.Token)
+	subject := "Wellness Ping"
+	body := ""
+
+	if reminderNum == 0 {
+		body = fmt.Sprintf("Hi! Just checking in.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", link)
+	} else {
+		var timeRemaining string
+		if user.PingFrequency == "daily" {
+			hoursLeft := 24 - (reminderNum * 6)
+			timeRemaining = fmt.Sprintf("%d hours", hoursLeft)
+		} else {
+			daysLeft := 7 - reminderNum
+			timeRemaining = fmt.Sprintf("%d days", daysLeft)
+		}
+
+		body = fmt.Sprintf("Reminder: You haven't checked in yet.\n\nYou have %s remaining before your contacts are notified.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", timeRemaining, link)
+		subject = "Wellness Ping - Reminder"
+	}
+
+	sendEmail(user.Email, subject, body)
+}
+
+func sendAlert(user *User) {
+	subject := fmt.Sprintf("Wellness Alert - %s Not Responding", user.Email)
+	body := fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
+
+	for _, alertEmail := range user.AlertEmails {
+		sendEmail(alertEmail, subject, body)
+	}
+}
+
+func sendAllClearEmail(user *User) {
+	subject := fmt.Sprintf("All Clear - %s Checked In", user.Email)
+	body := fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
+
+	for _, alertEmail := range user.AlertEmails {
+		sendEmail(alertEmail, subject, body)
+	}
+}
+
+func sendEmail(to, subject, body string) {
+	token := os.Getenv("POSTMARK_TOKEN")
+	if token == "" {
+		log.Printf("POSTMARK_TOKEN not set, would send email to %s with subject: %s and body: %s", to, subject, body)
+		return
+	}
+
+	htmlBody := strings.ReplaceAll(body, "\n", "<br>")
+
+	payload := map[string]string{
+		"From":          "ping@wellness-p.ing",
+		"To":            to,
+		"Subject":       subject,
+		"HtmlBody":      htmlBody,
+		"MessageStream": "outbound",
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshaling email data: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", "https://api.postmarkapp.com/email", strings.NewReader(string(jsonData)))
+	if err != nil {
+		log.Printf("Error creating request: %v", err)
+		return
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Postmark-Server-Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error sending email to %s: %v", to, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Error sending email to %s: %d - %s", to, resp.StatusCode, string(bodyBytes))
+		return
+	}
+
+	log.Printf("Email sent successfully to %s", to)
 }
 
 func extractEmail(from string) string {
@@ -518,6 +633,10 @@ func loadStore() {
 		return
 	}
 	json.Unmarshal(data, &store)
+
+	if store.Sessions == nil {
+		store.Sessions = make(map[string]*Session)
+	}
 }
 
 func saveStore() {

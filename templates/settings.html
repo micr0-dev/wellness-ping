@@ -9,12 +9,22 @@
 <body>
     <h1>Wellness Ping Settings</h1>
     
+    {{if not .User}}
+    <div style="background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-left: 3px solid #333;">
+        <p><b>How it works:</b></p>
+        <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're okay.</p>
+        <p>If you don't respond, we'll send reminders. If you still don't respond by your next ping, we'll alert your contacts.</p>
+        <p><b>Daily:</b> 3 reminders over 24 hours (every 6 hours)</p>
+        <p><b>Weekly:</b> 6 reminders over 7 days (once per day)</p>
+    </div>
+    {{end}}
+
     {{if .User}}
     <h3>Current Settings</h3>
     <p><b>Email:</b> {{.User.Email}}</p>
     <p><b>Alert Emails:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
     <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
-    <p><b>Inactivity Alert:</b> {{.User.InactivityHours}} hours</p>
+    <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
     <br>
     {{end}}
     
@@ -22,7 +32,7 @@
         <input type="hidden" name="email" value="{{.Email}}">
         
         <label>Alert Email List (comma-separated):</label><br>
-        <input type="text" name="alert_emails" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
+        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
         
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">
@@ -30,15 +40,45 @@
             <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly"}}selected{{end}}{{end}}>Weekly</option>
         </select><br><br>
         
-        <label>Alert After (hours of no response):</label><br>
-        <input type="number" name="inactivity_hours" value="{{if .User}}{{.User.InactivityHours}}{{else}}24{{end}}" min="1" required><br><br>
+        <label>Your Timezone:</label><br>
+        <select name="timezone" required>
+            <option value="UTC">UTC</option>
+            <option value="America/New_York">Eastern Time (US)</option>
+            <option value="America/Chicago">Central Time (US)</option>
+            <option value="America/Denver">Mountain Time (US)</option>
+            <option value="America/Los_Angeles">Pacific Time (US)</option>
+            <option value="America/Phoenix">Arizona</option>
+            <option value="America/Anchorage">Alaska</option>
+            <option value="America/Adak">Hawaii-Aleutian</option>
+            <option value="Europe/London">London</option>
+            <option value="Europe/Paris">Paris/Berlin/Madrid</option>
+            <option value="Europe/Athens">Athens</option>
+            <option value="Europe/Moscow">Moscow</option>
+            <option value="Asia/Dubai">Dubai</option>
+            <option value="Asia/Karachi">Karachi</option>
+            <option value="Asia/Kolkata">India</option>
+            <option value="Asia/Shanghai">China</option>
+            <option value="Asia/Tokyo">Tokyo</option>
+            <option value="Australia/Sydney">Sydney</option>
+            <option value="Pacific/Auckland">New Zealand</option>
+        </select><br><br>
+        
+        <label>Preferred Check-in Time (your local time):</label><br>
+        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br>
         
         <button type="submit" name="action" value="save">Save Settings</button><br><br>
         
         {{if .User}}
-        <button type="submit" name="action" value="stop">Stop Service</button>
+        <button type="submit" name="action" value="stop">Stop Service & Delete All Data</button>
         {{end}}
     </form>
+    
+    {{if .User}}
+    <br>
+    <form action="/test-ping" method="POST">
+        <button type="submit">Send Test Ping Now</button>
+    </form>
+    {{end}}
     
     <br>
     <a href="/">Back to home</a>
@@ -48,6 +88,10 @@
         <p style="font-size: 14px; color: #666;">
             Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> | 
             Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a>
+        </p>
+        <p style="font-size: 12px; color: #888; margin-top: 8px;">
+            Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking. 
+            Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
         </p>
     </footer>
 </body>
