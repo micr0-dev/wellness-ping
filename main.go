@@ -54,6 +54,14 @@ var store = &Store{
 }
 
 func main() {
+	if os.Getenv("POSTMARK_TOKEN") == "" {
+		log.Println("Warning: POSTMARK_TOKEN not set. Emails will not be sent.")
+	}
+
+	if os.Getenv("INBOUND_SECRET") == "" {
+		log.Println("Warning: INBOUND_SECRET not set. Inbound email verification will not work.")
+	}
+
 	loadStore()
 
 	http.HandleFunc("/", indexHandler)
@@ -362,6 +370,20 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expectedSecret := os.Getenv("INBOUND_SECRET")
+	if expectedSecret == "" {
+		log.Printf("INBOUND_SECRET not set!")
+		http.Error(w, "Server configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	providedSecret := r.URL.Query().Get("secret")
+	if providedSecret != expectedSecret {
+		log.Printf("Invalid inbound secret from IP: %s", r.RemoteAddr)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	var inboundEmail struct {
 		From      string `json:"From"`
 		To        string `json:"To"`
@@ -377,8 +399,6 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("Received inbound email from %s", inboundEmail.From)
 
 	bodyText := strings.ToLower(inboundEmail.TextBody)
 	if !strings.Contains(bodyText, "pong") {
@@ -412,8 +432,6 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	saveStore()
-
-	log.Printf("User %s checked in via email reply", fromEmail)
 
 	if wasAlerted {
 		sendAllClearEmail(user)
@@ -608,8 +626,6 @@ func sendEmail(to, subject, body string) {
 		log.Printf("Error sending email to %s: %d - %s", to, resp.StatusCode, string(bodyBytes))
 		return
 	}
-
-	log.Printf("Email sent successfully to %s", to)
 }
 
 func sendReplyEmail(to, inReplyTo, originalSubject, originalBody string) {
@@ -679,8 +695,6 @@ func sendReplyEmail(to, inReplyTo, originalSubject, originalBody string) {
 		log.Printf("Error sending reply email to %s: %d - %s", to, resp.StatusCode, string(bodyBytes))
 		return
 	}
-
-	log.Printf("Reply email sent successfully to %s", to)
 }
 
 func extractEmail(from string) string {
@@ -728,6 +742,9 @@ func loadStore() {
 func saveStore() {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
+
+	// User count to track growth
+	log.Printf("Saving store with %d users (DATE: %s)", len(store.Users), time.Now().Format(time.RFC3339))
 
 	data, _ := json.MarshalIndent(store, "", "  ")
 	os.WriteFile("data/users.json", data, 0644)
