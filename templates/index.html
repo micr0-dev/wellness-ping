@@ -10,11 +10,21 @@
     <h1>Wellness Ping</h1>
     <h2>For anyone who might go <em>missing</em></h2>
     <p>Enter your email to get started.</p>
-    
+
     <form action="/send-code" method="POST">
         <label>Email:</label><br>
         <input type="email" name="email" required><br><br>
         <button type="submit">Send Verification Code</button>
     </form>
+
+    <details style="margin-top: 25px;">
+        <summary style="cursor: pointer; font-weight: bold; padding: 10px; background: #f9f9f9; ">What is this? (click to expand)</summary>
+        <div style="background: #f9f9f9; padding: 15px; border-left: 3px solid #333;">
+        <p><strong>What this is:</strong> Regular email check-ins. If you don't respond, your emergency contacts get notified.</p>
+        <p><strong>Who it's for:</strong> Activists, journalists, researchers, solo folks. Anyone who needs someone to notice if they go silent.</p>
+        <p><strong>How it works:</strong> Choose daily or weekly pings. Click the link in the email or reply "PONG" to confirm you're okay. Miss the ping? We'll send reminders. Still no response? Your emergency contacts get alerted.</p>
+        <p style="font-size: 14px; margin-top: 10px;">Free forever. Premium hosting in Sweden for reliability. Minimal data retention. <a href="https://github.com/micr0-dev/wellness-ping">Open source</a>.</p>
+        </div>
+    </details>
 </body>
 </html>
