@@ -419,7 +419,7 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 		sendAllClearEmail(user)
 	}
 
-	sendEmail(fromEmail, "Wellness Ping Confirmed", "Thanks for checking in! We received your PONG.")
+	sendReplyEmail(fromEmail, inboundEmail.MessageID, inboundEmail.Subject)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -610,6 +610,75 @@ func sendEmail(to, subject, body string) {
 	}
 
 	log.Printf("Email sent successfully to %s", to)
+}
+
+func sendReplyEmail(to, inReplyTo, originalSubject string) {
+	token := os.Getenv("POSTMARK_TOKEN")
+	if token == "" {
+		log.Printf("POSTMARK_TOKEN not set, would send reply email to %s", to)
+		return
+	}
+
+	subject := originalSubject
+	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
+		subject = "Re: " + subject
+	}
+
+	body := "Thanks for checking in! We received your PONG."
+	htmlBody := strings.ReplaceAll(body, "\n", "<br>")
+
+	payload := map[string]interface{}{
+		"From":          "ping@wellness-p.ing",
+		"To":            to,
+		"Subject":       subject,
+		"HtmlBody":      htmlBody,
+		"MessageStream": "outbound",
+	}
+
+	if inReplyTo != "" {
+		payload["Headers"] = []map[string]string{
+			{
+				"Name":  "In-Reply-To",
+				"Value": inReplyTo,
+			},
+			{
+				"Name":  "References",
+				"Value": inReplyTo,
+			},
+		}
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshaling email data: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", "https://api.postmarkapp.com/email", strings.NewReader(string(jsonData)))
+	if err != nil {
+		log.Printf("Error creating request: %v", err)
+		return
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Postmark-Server-Token", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error sending reply email to %s: %v", to, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Printf("Error sending reply email to %s: %d - %s", to, resp.StatusCode, string(bodyBytes))
+		return
+	}
+
+	log.Printf("Reply email sent successfully to %s", to)
 }
 
 func extractEmail(from string) string {
