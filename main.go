@@ -304,7 +304,8 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		hash, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
+		// Using email as extra salt for security
+		hash, err := bcrypt.GenerateFromPassword([]byte(email+":"+pin), bcrypt.DefaultCost)
 		if err != nil {
 			http.Error(w, "Error hashing PIN", http.StatusInternalServerError)
 			return
@@ -320,7 +321,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Duress PIN must be different from normal PIN", http.StatusBadRequest)
 				return
 			}
-			hash, err := bcrypt.GenerateFromPassword([]byte(duressPin), bcrypt.DefaultCost)
+
+			// Using email as extra salt for security
+			hash, err := bcrypt.GenerateFromPassword([]byte(email+":"+duressPin), bcrypt.DefaultCost)
 			if err != nil {
 				http.Error(w, "Error hashing duress PIN", http.StatusInternalServerError)
 				return
@@ -453,14 +456,14 @@ func checkPinHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check normal PIN
-	if bcrypt.CompareHashAndPassword([]byte(foundUser.PINHash), []byte(pin)) == nil {
+	if bcrypt.CompareHashAndPassword([]byte(foundUser.PINHash), []byte(foundUser.Email+":"+pin)) == nil {
 		processPongCheckIn(foundUser, false)
 		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
 		return
 	}
 
 	// Check duress PIN
-	if foundUser.DuressPINHash != "" && bcrypt.CompareHashAndPassword([]byte(foundUser.DuressPINHash), []byte(pin)) == nil {
+	if foundUser.DuressPINHash != "" && bcrypt.CompareHashAndPassword([]byte(foundUser.DuressPINHash), []byte(foundUser.Email+":"+pin)) == nil {
 		processPongCheckIn(foundUser, true)
 		// Show normal confirmation to not alert the attacker
 		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
