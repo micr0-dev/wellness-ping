@@ -16,16 +16,19 @@ import (
 	"time"
 )
 
+const VERSION = "1.0.2"
+
 type User struct {
-	Email           string    `json:"email"`
-	AlertEmails     []string  `json:"alert_emails"`
-	PingFrequency   string    `json:"ping_frequency"`
-	CheckInHour     int       `json:"checkin_hour"`
-	LastPing        time.Time `json:"last_ping"`
-	LastReminderNum int       `json:"last_reminder_num"`
-	Active          bool      `json:"active"`
-	Token           string    `json:"token"`
-	AlertSent       bool      `json:"alert_sent"`
+	Email             string    `json:"email"`
+	AlertEmails       []string  `json:"alert_emails"`
+	PingFrequency     string    `json:"ping_frequency"`
+	CheckInHour       int       `json:"checkin_hour"`
+	LastPing          time.Time `json:"last_ping"`
+	CurrentCycleStart time.Time `json:"current_cycle_start"`
+	LastReminderNum   int       `json:"last_reminder_num"`
+	Active            bool      `json:"active"`
+	Token             string    `json:"token"`
+	AlertSent         bool      `json:"alert_sent"`
 }
 
 type PendingVerification struct {
@@ -81,8 +84,12 @@ func main() {
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
+	data := map[string]string{
+		"Version": VERSION,
+	}
 	tmpl := template.Must(template.ParseFiles("templates/index.html"))
-	tmpl.Execute(w, nil)
+
+	tmpl.Execute(w, data)
 }
 
 func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
@@ -189,8 +196,9 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	store.mu.RUnlock()
 
 	data := map[string]interface{}{
-		"User":  user,
-		"Email": email,
+		"User":    user,
+		"Email":   email,
+		"Version": VERSION,
 	}
 
 	tmpl := template.Must(template.ParseFiles("templates/settings.html"))
@@ -275,15 +283,16 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	token := generateToken()
 
 	user := &User{
-		Email:           email,
-		AlertEmails:     alertEmails,
-		PingFrequency:   pingFreq,
-		CheckInHour:     checkInHourUTC,
-		LastPing:        time.Now(),
-		LastReminderNum: 0,
-		Active:          true,
-		Token:           token,
-		AlertSent:       false,
+		Email:             email,
+		AlertEmails:       alertEmails,
+		PingFrequency:     pingFreq,
+		CheckInHour:       checkInHourUTC,
+		LastPing:          time.Now(),
+		CurrentCycleStart: time.Time{},
+		LastReminderNum:   0,
+		Active:            true,
+		Token:             token,
+		AlertSent:         false,
 	}
 
 	store.mu.Lock()
@@ -480,25 +489,28 @@ func pingScheduler() {
 			}
 
 			timeSinceLastPing := time.Since(user.LastPing)
+			timeSinceCycleStart := time.Since(user.CurrentCycleStart)
 
 			if user.PingFrequency == "daily" {
 				lastPingDate := user.LastPing.Truncate(24 * time.Hour)
 				todayDate := now.Truncate(24 * time.Hour)
 
 				if todayDate.After(lastPingDate) {
-					if now.Hour() >= user.CheckInHour && user.LastReminderNum == 0 {
+					if now.Hour() >= user.CheckInHour {
 						store.mu.Lock()
 						user.LastReminderNum = 0
+						user.CurrentCycleStart = time.Now() // Mark cycle start
 						store.mu.Unlock()
 						sendPing(user, 0)
 						needsSave = true
 						continue
 					}
 				}
-			} else {
+			} else { // weekly
 				if timeSinceLastPing >= pingInterval && now.Hour() >= user.CheckInHour {
 					store.mu.Lock()
 					user.LastReminderNum = 0
+					user.CurrentCycleStart = time.Now() // Mark cycle start
 					store.mu.Unlock()
 					sendPing(user, 0)
 					needsSave = true
@@ -506,8 +518,11 @@ func pingScheduler() {
 				}
 			}
 
-			if timeSinceLastPing > 0 {
-				expectedReminderNum := int(timeSinceLastPing / reminderInterval)
+			if !user.CurrentCycleStart.IsZero() &&
+				user.LastPing.Before(user.CurrentCycleStart) &&
+				timeSinceCycleStart < pingInterval {
+
+				expectedReminderNum := int(timeSinceCycleStart / reminderInterval)
 
 				maxReminders := 3
 				if user.PingFrequency == "weekly" {
@@ -521,14 +536,18 @@ func pingScheduler() {
 					sendPing(user, expectedReminderNum)
 					needsSave = true
 				}
+			}
 
-				if timeSinceLastPing >= pingInterval && !user.AlertSent {
-					store.mu.Lock()
-					user.AlertSent = true
-					store.mu.Unlock()
-					sendAlert(user)
-					needsSave = true
-				}
+			if !user.CurrentCycleStart.IsZero() &&
+				user.LastPing.Before(user.CurrentCycleStart) &&
+				timeSinceCycleStart >= pingInterval &&
+				!user.AlertSent {
+
+				store.mu.Lock()
+				user.AlertSent = true
+				store.mu.Unlock()
+				sendAlert(user)
+				needsSave = true
 			}
 		}
 
