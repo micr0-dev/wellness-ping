@@ -1,22 +1,27 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Wellness Ping</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
     <h1>Wellness Ping Settings</h1>
-    
+
     {{if not .User}}
     <div style="background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-left: 3px solid #333;">
         <p><b>How it works:</b></p>
-        <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're okay.</p>
-        <p>If you don't respond, we'll send reminders. If you still don't respond by your next ping, we'll alert your contacts.</p>
+        <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're
+            okay.</p>
+        <p>If you don't respond, we'll send reminders. If you still don't respond by your next ping, we'll alert your
+            contacts.</p>
         <p><b>Daily:</b> 3 reminders over 24 hours (every 6 hours)</p>
         <p><b>Weekly:</b> 6 reminders over 7 days (once per day)</p>
-        <p style="margin-top: 10px;"><b>Note:</b> Your contacts are NOT notified when you add them. You may want to let them know personally that they're on your emergency contact list.</p>
+        <p style="margin-top: 10px;"><b>Note:</b> Your contacts are NOT notified when you add them. You may want to let
+            them know personally that they're on your emergency contact list.</p>
     </div>
     {{end}}
 
@@ -28,19 +33,23 @@
     <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
     <br>
     {{end}}
-    
+
     <form action="/update" method="POST">
         <input type="hidden" name="email" value="{{.Email}}">
-        
+
         <label>Alert Email List (comma-separated):</label><br>
-        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
-        
+        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com"
+            value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}"
+            required><br><br>
+
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">
-            <option value="daily" {{if .User}}{{if eq .User.PingFrequency "daily"}}selected{{end}}{{end}}>Daily</option>
-            <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly"}}selected{{end}}{{end}}>Weekly</option>
+            <option value="daily" {{if .User}}{{if eq .User.PingFrequency "daily" }}selected{{end}}{{end}}>Daily
+            </option>
+            <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly" }}selected{{end}}{{end}}>Weekly
+            </option>
         </select><br><br>
-        
+
         <label>Your Timezone:</label><br>
         <select name="timezone" required>
             <option value="UTC">UTC</option>
@@ -63,38 +72,82 @@
             <option value="Australia/Sydney">Sydney</option>
             <option value="Pacific/Auckland">New Zealand</option>
         </select><br><br>
-        
+
         <label>Preferred Check-in Time (your local time):</label><br>
-        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br>
-        
+        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0"
+            max="23" required> : 00<br>
+
+        <hr style="margin: 30px 0;">
+
+        <h3>PIN Authentication (Optional)</h3>
+        <p style="font-size: 14px; color: #666;">Enable PIN to require a code when checking in. This prevents anyone
+            with access to your email from checking in for you.</p>
+
+        <label>
+            <input type="checkbox" name="pin_enabled" {{if .User}}{{if .User.PINEnabled}}checked{{end}}{{end}}> Enable
+            PIN Authentication
+        </label><br><br>
+
+        <div id="pin-fields"
+            style="{{if .User}}{{if not .User.PINEnabled}}display:none;{{end}}{{else}}display:none;{{end}}">
+            <label>PIN (4-8 digits):</label><br>
+            <input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" minlength="4" maxlength="8"><br>
+            <small style="color: #666;">Leave blank to keep current PIN</small><br><br>
+
+            <label>Duress PIN (optional, 4-8 digits):</label><br>
+            <input type="password" name="duress_pin" inputmode="numeric" pattern="[0-9]*" minlength="4"
+                maxlength="8"><br>
+            <small style="color: #666;">Use this PIN if you're under duress. It will look like a normal check-in but
+                secretly alert your contacts.</small><br><br>
+        </div>
+
+        <script>
+            document.querySelector('input[name="pin_enabled"]').addEventListener('change', function () {
+                document.getElementById('pin-fields').style.display = this.checked ? 'block' : 'none';
+            });
+        </script>
+
+        <hr style="margin: 30px 0;">
+
+        <h3>Custom Alert Message (Optional)</h3>
+        <p style="font-size: 14px; color: #666;">Add instructions for your emergency contacts (e.g., "Call my lawyer at
+            555-1234")</p>
+
+        <label>Custom message:</label><br>
+        <textarea name="custom_alert_msg" rows="3"
+            style="width: 100%; padding: 8px;">{{if .User}}{{.User.CustomAlertMsg}}{{end}}</textarea><br><br>
+
         <button type="submit" name="action" value="save">Save Settings</button><br><br>
-        
+
         {{if .User}}
         <button type="submit" name="action" value="stop">Stop Service & Delete All Data</button>
         {{end}}
     </form>
-    
+
     {{if .User}}
     <br>
     <form action="/test-ping" method="POST">
         <button type="submit">Send Test Ping Now</button>
     </form>
     {{end}}
-    
+
     <br>
     <a href="/">Back to home</a>
-    
+
     <hr>
     <footer>
         <p style="font-size: 14px; color: #666;">
-            Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> | 
-            Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> | 
+            Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
+            Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
+            Donate: <a href="https://ko-fi.com/micr0">Ko-fi</a>, <a href="https://github.com/sponsors/micr0-dev">GitHub
+                Sponsors</a> |
             Version: {{.Version}}
         </p>
         <p style="font-size: 12px; color: #888; margin-top: 8px;">
-            Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking. 
+            Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
             Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
         </p>
     </footer>
 </body>
+
 </html>
