@@ -1,20 +1,20 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Verify Email - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-    <h1>Verify Your Email</h1>
-    <p>We sent a 8-digit code to {{.Email}}</p>
-    
-    <form action="/verify-code" method="POST">
-        <input type="hidden" name="email" value="{{.Email}}">
-        <label>Verification Code:</label><br>
-        <input type="text" name="code" required><br><br>
-        <button type="submit">Verify</button>
-    </form>
-</body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Verify Email - Wellness Ping</title>
+        <link rel="stylesheet" href="/static/style.css" />
+    </head>
+    <body>
+        <h1>Verify Your Email</h1>
+        <p>We sent a 8-digit code to {{.Email}}</p>
+
+        <form action="/verify-code" method="POST">
+            <input type="hidden" name="email" value="{{.Email}}" />
+            <label>Verification Code:</label><br />
+            <input type="text" name="code" required /><br /><br />
+            <button type="submit">Verify</button>
+        </form>
+    </body>
 </html>
