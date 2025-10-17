@@ -716,7 +716,13 @@ func sendAlert(user *User) {
 
 func sendDuressAlert(user *User) {
 	subject := fmt.Sprintf("DURESS ALERT - %s", user.Email)
-	body := fmt.Sprintf("CRITICAL: %s has checked in using their duress PIN.\n\nThis indicates they may be in danger or under coercion.\n\nDO NOT contact them directly. Follow your emergency procedures.", user.Email)
+
+	var body string
+	if user.CustomAlertMsg != "" {
+		body = fmt.Sprintf("CRITICAL: %s has checked in using their duress PIN.\n\nThis indicates they may be in danger or under coercion.\n\nDO NOT contact them directly. Follow your emergency procedures\n\n%s", user.Email, user.CustomAlertMsg)
+	} else {
+		body = fmt.Sprintf("CRITICAL: %s has checked in using their duress PIN.\n\nThis indicates they may be in danger or under coercion.\n\nDO NOT contact them directly. Follow your emergency procedures.", user.Email)
+	}
 
 	for _, alertEmail := range user.AlertEmails {
 		sendEmail(alertEmail, subject, body)
