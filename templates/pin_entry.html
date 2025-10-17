@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enter PIN - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>Enter Your PIN</h1>
+    <p>Please enter your PIN to confirm check-in.</p>
+
+    <form action="/check-pin" method="POST">
+        <input type="hidden" name="token" value="{{.Token}}">
+        <label>PIN:</label><br>
+        <input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" required autofocus><br><br>
+        <button type="submit">Confirm</button>
+    </form>
+</body>
+
+</html>
