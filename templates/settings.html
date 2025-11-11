@@ -12,7 +12,7 @@
     <h1>Wellness Ping Settings</h1>
 
     {{if not .User}}
-    <div style="background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-left: 3px solid #333;">
+    <div class="raised">
         <p><b>How it works:</b></p>
         <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're
             okay.</p>
@@ -37,7 +37,7 @@
     <form action="/update" method="POST">
         <input type="hidden" name="email" value="{{.Email}}">
 
-        <label>Alert Email List (comma-separated):</label><br>
+        <label>Alert Email List (comma-separated, max 10):</label><br>
         <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com"
             value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}"
             required><br><br>

@@ -254,19 +254,52 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	alertEmailsStr := r.FormValue("alert_emails")
+	if strings.TrimSpace(alertEmailsStr) == "" {
+		http.Error(w, "Alert emails are required", http.StatusBadRequest)
+		return
+	}
+
 	alertEmails := []string{}
 	for _, e := range strings.Split(alertEmailsStr, ",") {
 		e = strings.TrimSpace(e)
 		if e != "" {
+			if !strings.Contains(e, "@") || !strings.Contains(e, ".") {
+				http.Error(w, fmt.Sprintf("Invalid email address: %s", e), http.StatusBadRequest)
+				return
+			}
 			alertEmails = append(alertEmails, e)
 		}
 	}
 
+	if len(alertEmails) == 0 {
+		http.Error(w, "At least one alert email is required", http.StatusBadRequest)
+		return
+	}
+
+	const maxContacts = 10
+	if len(alertEmails) > maxContacts {
+		http.Error(w, fmt.Sprintf("Maximum %d emergency contacts allowed (you provided %d)", maxContacts, len(alertEmails)), http.StatusBadRequest)
+		return
+	}
+
 	pingFreq := r.FormValue("ping_frequency")
+	if pingFreq != "daily" && pingFreq != "weekly" {
+		http.Error(w, "Ping frequency must be 'daily' or 'weekly'", http.StatusBadRequest)
+		return
+	}
 
 	localHour := 9
 	if r.FormValue("checkin_hour") != "" {
-		fmt.Sscanf(r.FormValue("checkin_hour"), "%d", &localHour)
+		n, err := fmt.Sscanf(r.FormValue("checkin_hour"), "%d", &localHour)
+		if err != nil || n != 1 {
+			http.Error(w, "Invalid check-in hour format", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if localHour < 0 || localHour > 23 {
+		http.Error(w, "Check-in hour must be between 0 and 23", http.StatusBadRequest)
+		return
 	}
 
 	timezone := r.FormValue("timezone")
@@ -276,13 +309,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
-		log.Printf("Invalid timezone %s, defaulting to UTC", timezone)
-		loc = time.UTC
+		http.Error(w, fmt.Sprintf("Invalid timezone: %s", timezone), http.StatusBadRequest)
+		return
 	}
 
 	now := time.Now()
 	localTime := time.Date(now.Year(), now.Month(), now.Day(), localHour, 0, 0, 0, loc)
-
 	utcTime := localTime.UTC()
 	checkInHourUTC := utcTime.Hour()
 
@@ -399,6 +431,10 @@ func testPingHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func pongHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
 	token := r.URL.Query().Get("token")
 
 	store.mu.RLock()
@@ -570,8 +606,12 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func pingScheduler() {
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := time.NewTicker(1 * time.Minute)
+
 	for range ticker.C {
+		now := time.Now()
+
+		// Clean up expired sessions
 		store.mu.Lock()
 		for token, session := range store.Sessions {
 			if time.Now().After(session.ExpiresAt) {
@@ -587,7 +627,6 @@ func pingScheduler() {
 		}
 		store.mu.RUnlock()
 
-		now := time.Now()
 		needsSave := false
 
 		for _, user := range users {
@@ -606,19 +645,46 @@ func pingScheduler() {
 				reminderInterval = 24 * time.Hour
 			}
 
-			timeSinceLastPing := time.Since(user.LastPing)
-			timeSinceCycleStart := time.Since(user.CurrentCycleStart)
+			cycleComplete := user.CurrentCycleStart.IsZero() || user.LastPing.After(user.CurrentCycleStart)
 
-			if user.PingFrequency == "daily" {
-				lastPingDate := user.LastPing.Truncate(24 * time.Hour)
-				todayDate := now.Truncate(24 * time.Hour)
+			if cycleComplete && now.Hour() == user.CheckInHour && now.Minute() < 5 {
+				if user.PingFrequency == "daily" {
+					lastResponseDate := user.LastPing.Truncate(24 * time.Hour)
+					todayDate := now.Truncate(24 * time.Hour)
 
-				if todayDate.After(lastPingDate) {
-					if now.Hour() >= user.CheckInHour {
+					if todayDate.After(lastResponseDate) {
 						store.mu.Lock()
-						user.LastReminderNum = 0
 						user.CurrentCycleStart = time.Now()
+						user.LastReminderNum = 0
+						user.AlertSent = false
+						user.Token = generateToken()
 						store.mu.Unlock()
+						log.Printf("Starting new DAILY cycle for %s", user.Email)
+						sendPing(user, 0)
+						needsSave = true
+						continue
+					}
+				} else {
+					if user.CurrentCycleStart.IsZero() {
+						store.mu.Lock()
+						user.CurrentCycleStart = time.Now()
+						user.LastReminderNum = 0
+						user.AlertSent = false
+						user.Token = generateToken()
+						store.mu.Unlock()
+						log.Printf("Starting FIRST weekly cycle for %s", user.Email)
+						sendPing(user, 0)
+						needsSave = true
+						continue
+					}
+					if time.Since(user.LastPing) >= pingInterval {
+						store.mu.Lock()
+						user.CurrentCycleStart = time.Now()
+						user.LastReminderNum = 0
+						user.AlertSent = false
+						user.Token = generateToken()
+						store.mu.Unlock()
+						log.Printf("Starting new WEEKLY cycle for %s", user.Email)
 						sendPing(user, 0)
 						needsSave = true
 						continue
@@ -636,36 +702,35 @@ func pingScheduler() {
 				}
 			}
 
-			if !user.CurrentCycleStart.IsZero() &&
-				user.LastPing.Before(user.CurrentCycleStart) &&
-				timeSinceCycleStart < pingInterval {
+			if !user.CurrentCycleStart.IsZero() && user.LastPing.Before(user.CurrentCycleStart) {
+				timeSinceCycleStart := time.Since(user.CurrentCycleStart)
 
-				expectedReminderNum := int(timeSinceCycleStart / reminderInterval)
+				if timeSinceCycleStart < pingInterval {
+					expectedReminderNum := int(timeSinceCycleStart / reminderInterval)
 
-				maxReminders := 3
-				if user.PingFrequency == "weekly" {
-					maxReminders = 6
+					maxReminders := 3
+					if user.PingFrequency == "weekly" {
+						maxReminders = 6
+					}
+
+					if expectedReminderNum > 0 && expectedReminderNum > user.LastReminderNum && expectedReminderNum <= maxReminders {
+						store.mu.Lock()
+						user.LastReminderNum = expectedReminderNum
+						store.mu.Unlock()
+						log.Printf("Sending reminder #%d to %s", expectedReminderNum, user.Email)
+						sendPing(user, expectedReminderNum)
+						needsSave = true
+					}
 				}
 
-				if expectedReminderNum > user.LastReminderNum && expectedReminderNum <= maxReminders {
+				if timeSinceCycleStart >= pingInterval && !user.AlertSent {
 					store.mu.Lock()
-					user.LastReminderNum = expectedReminderNum
+					user.AlertSent = true
 					store.mu.Unlock()
-					sendPing(user, expectedReminderNum)
+					log.Printf("ALERT: Sending emergency alert for %s", user.Email)
+					sendAlert(user)
 					needsSave = true
 				}
-			}
-
-			if !user.CurrentCycleStart.IsZero() &&
-				user.LastPing.Before(user.CurrentCycleStart) &&
-				timeSinceCycleStart >= pingInterval &&
-				!user.AlertSent {
-
-				store.mu.Lock()
-				user.AlertSent = true
-				store.mu.Unlock()
-				sendAlert(user)
-				needsSave = true
 			}
 		}
 
@@ -898,8 +963,8 @@ func loadStore() {
 }
 
 func saveStore() {
-	store.mu.RLock()
-	defer store.mu.RUnlock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
 	// User count to track growth
 	log.Printf("Saving store with %d users (DATE: %s)", len(store.Users), time.Now().Format(time.RFC3339))
