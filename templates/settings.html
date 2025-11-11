@@ -1,22 +1,27 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Wellness Ping</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
     <h1>Wellness Ping Settings</h1>
 
     {{if not .User}}
     <div class="raised">
         <p><b>How it works:</b></p>
-        <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're okay.</p>
-        <p>If you don't respond, we'll send reminders. If you still don't respond by your next ping, we'll alert your contacts.</p>
+        <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're
+            okay.</p>
+        <p>If you don't respond, we'll send reminders. If you still don't respond by your next ping, we'll alert your
+            contacts.</p>
         <p><b>Daily:</b> 3 reminders over 24 hours (every 6 hours)</p>
         <p><b>Weekly:</b> 6 reminders over 7 days (once per day)</p>
-        <p style="margin-top: 10px;"><b>Note:</b> Your contacts are NOT notified when you add them. You may want to let them know personally that they're on your emergency contact list.</p>
+        <p style="margin-top: 10px;"><b>Note:</b> Your contacts are NOT notified when you add them. You may want to let
+            them know personally that they're on your emergency contact list.</p>
     </div>
     {{end}}
 
@@ -37,8 +42,10 @@
 
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">
-            <option value="daily" {{if .User}}{{if eq .User.PingFrequency "daily"}}selected{{end}}{{end}}>Daily</option>
-            <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly"}}selected{{end}}{{end}}>Weekly</option>
+            <option value="daily" {{if .User}}{{if eq .User.PingFrequency "daily" }}selected{{end}}{{end}}>Daily
+            </option>
+            <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly" }}selected{{end}}{{end}}>Weekly
+            </option>
         </select><br><br>
 
         <label>Your Timezone:</label><br>
