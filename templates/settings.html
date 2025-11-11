@@ -12,7 +12,7 @@
     <h1>Wellness Ping Settings</h1>
 
     {{if not .User}}
-    <div style="background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-left: 3px solid #333;">
+    <div class="raised">
         <p><b>How it works:</b></p>
         <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're
             okay.</p>
@@ -37,10 +37,8 @@
     <form action="/update" method="POST">
         <input type="hidden" name="email" value="{{.Email}}">
 
-        <label>Alert Email List (comma-separated, max 10):</label><br>
-        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com"
-            value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}"
-            required><br><br>
+        <label>Alert Email List (comma-separated):</label><br>
+        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
 
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">
@@ -74,8 +72,7 @@
         </select><br><br>
 
         <label>Preferred Check-in Time (your local time):</label><br>
-        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0"
-            max="23" required> : 00<br>
+        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br>
 
         <button type="submit" name="action" value="save">Save Settings</button><br><br>
 
@@ -96,16 +93,12 @@
 
     <hr>
     <footer>
-        <p style="font-size: 14px; color: #666;">
-            Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
-            Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
-            Version: {{.Version}}
-        </p>
-        <p style="font-size: 12px; color: #888; margin-top: 8px;">
-            Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
-            Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
-        </p>
+        Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
+        Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
+        Version: {{.Version}}
+        <br>
+        Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
+        Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
     </footer>
 </body>
-
 </html>
