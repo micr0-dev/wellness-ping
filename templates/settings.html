@@ -37,7 +37,7 @@
     <form action="/update" method="POST">
         <input type="hidden" name="email" value="{{.Email}}">
 
-        <label>Alert Email List (comma-separated):</label><br>
+        <label>Alert Email List (comma-separated, max 10):</label><br>
         <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com"
             value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}"
             required><br><br>

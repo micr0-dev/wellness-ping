@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const VERSION = "1.0.3"
+const VERSION = "1.0.4"
 
 type User struct {
 	Email             string    `json:"email"`
@@ -270,6 +270,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const maxContacts = 10
+	if len(alertEmails) > maxContacts {
+		http.Error(w, fmt.Sprintf("Maximum %d emergency contacts allowed (you provided %d)", maxContacts, len(alertEmails)), http.StatusBadRequest)
+		return
+	}
+
 	pingFreq := r.FormValue("ping_frequency")
 	if pingFreq != "daily" && pingFreq != "weekly" {
 		http.Error(w, "Ping frequency must be 'daily' or 'weekly'", http.StatusBadRequest)
@@ -367,6 +373,10 @@ func testPingHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func pongHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
 	token := r.URL.Query().Get("token")
 
 	store.mu.Lock()
@@ -529,6 +539,7 @@ func pingScheduler() {
 						user.CurrentCycleStart = time.Now()
 						user.LastReminderNum = 0
 						user.AlertSent = false
+						user.Token = generateToken()
 						store.mu.Unlock()
 						log.Printf("Starting new DAILY cycle for %s", user.Email)
 						sendPing(user, 0)
@@ -541,6 +552,7 @@ func pingScheduler() {
 						user.CurrentCycleStart = time.Now()
 						user.LastReminderNum = 0
 						user.AlertSent = false
+						user.Token = generateToken()
 						store.mu.Unlock()
 						log.Printf("Starting FIRST weekly cycle for %s", user.Email)
 						sendPing(user, 0)
@@ -552,6 +564,7 @@ func pingScheduler() {
 						user.CurrentCycleStart = time.Now()
 						user.LastReminderNum = 0
 						user.AlertSent = false
+						user.Token = generateToken()
 						store.mu.Unlock()
 						log.Printf("Starting new WEEKLY cycle for %s", user.Email)
 						sendPing(user, 0)
