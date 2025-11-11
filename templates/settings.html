@@ -37,8 +37,10 @@
     <form action="/update" method="POST">
         <input type="hidden" name="email" value="{{.Email}}">
 
-        <label>Alert Email List (comma-separated):</label><br>
-        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
+        <label>Alert Email List (comma-separated, max 10):</label><br>
+        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com"
+            value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}"
+            required><br><br>
 
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">
@@ -72,7 +74,48 @@
         </select><br><br>
 
         <label>Preferred Check-in Time (your local time):</label><br>
-        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br>
+        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0"
+            max="23" required> : 00<br>
+
+        <hr style="margin: 30px 0;">
+
+        <h3>PIN Authentication (Optional)</h3>
+        <p style="font-size: 14px; color: #666;">Enable PIN to require a code when checking in. This prevents anyone
+            with access to your email from checking in for you.</p>
+
+        <label>
+            <input type="checkbox" name="pin_enabled" {{if .User}}{{if .User.PINEnabled}}checked{{end}}{{end}}> Enable
+            PIN Authentication
+        </label><br><br>
+
+        <div id="pin-fields"
+            style="{{if .User}}{{if not .User.PINEnabled}}display:none;{{end}}{{else}}display:none;{{end}}">
+            <label>PIN (4-8 digits):</label><br>
+            <input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" minlength="4" maxlength="8"><br>
+            <small style="color: #666;">Leave blank to keep current PIN</small><br><br>
+
+            <label>Duress PIN (optional, 4-8 digits):</label><br>
+            <input type="password" name="duress_pin" inputmode="numeric" pattern="[0-9]*" minlength="4"
+                maxlength="8"><br>
+            <small style="color: #666;">Use this PIN if you're under duress. It will look like a normal check-in but
+                secretly alert your contacts.</small><br><br>
+        </div>
+
+        <script>
+            document.querySelector('input[name="pin_enabled"]').addEventListener('change', function () {
+                document.getElementById('pin-fields').style.display = this.checked ? 'block' : 'none';
+            });
+        </script>
+
+        <hr style="margin: 30px 0;">
+
+        <h3>Custom Alert Message (Optional)</h3>
+        <p style="font-size: 14px; color: #666;">Add instructions for your emergency contacts (e.g., "Call my lawyer at
+            555-1234")</p>
+
+        <label>Custom message:</label><br>
+        <textarea name="custom_alert_msg" rows="3"
+            style="width: 100%; padding: 8px;">{{if .User}}{{.User.CustomAlertMsg}}{{end}}</textarea><br><br>
 
         <button type="submit" name="action" value="save">Save Settings</button><br><br>
 
@@ -93,12 +136,18 @@
 
     <hr>
     <footer>
-        Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
-        Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
-        Version: {{.Version}}
-        <br>
-        Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
-        Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
+        <p style="font-size: 14px; color: #666;">
+            Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
+            Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
+            Donate: <a href="https://ko-fi.com/micr0">Ko-fi</a>, <a href="https://github.com/sponsors/micr0-dev">GitHub
+                Sponsors</a> |
+            Version: {{.Version}}
+        </p>
+        <p style="font-size: 12px; color: #888; margin-top: 8px;">
+            Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
+            Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
+        </p>
     </footer>
 </body>
+
 </html>

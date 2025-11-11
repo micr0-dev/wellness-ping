@@ -20,20 +20,53 @@
         </form>
 
     <details style="margin-top: 25px;">
-        <summary style="cursor: pointer; font-weight: bold; padding: 10px; background: #f9f9f9; ">What is this? (click
-            to expand)</summary>
+        <summary style="cursor: pointer; font-weight: bold; padding: 10px; background: #f9f9f9;">What is this? (click to
+            expand)</summary>
         <div style="background: #f9f9f9; padding: 15px; border-left: 3px solid #333;">
             <p><strong>What this is:</strong> Regular email check-ins. If you don't respond, your emergency contacts get
                 notified.</p>
-            <p><strong>Who it's for:</strong> Activists, journalists, researchers, solo folks. Anyone who needs someone
-                to notice if they go silent.</p>
-            <p><strong>How it works:</strong> Choose daily or weekly pings. Click the link in the email or reply "PONG"
-                to confirm you're okay. Miss the ping? We'll send reminders. Still no response? Your emergency contacts
-                get alerted.</p>
-            <p style="font-size: 14px; margin-top: 10px;">Free forever. Premium hosting in Sweden for reliability.
-                Minimal data retention. <a href="https://github.com/micr0-dev/wellness-ping">Open source</a>.</p>
+
+            <p><strong>Who it's for:</strong> Anyone who needs someone to notice if they go silent.</p>
+            <ul style="margin: 5px 0 10px 20px;">
+                <li>Living alone (elderly, solo, remote workers)</li>
+                <li>Activists, journalists, researchers in risky situations</li>
+                <li>Hikers, travelers, adventurers</li>
+                <li>Anyone with health concerns or safety risks</li>
+            </ul>
+
+            <p><strong>How it works:</strong> Choose daily or weekly pings at your preferred time. Click the link in the
+                email or reply "PONG" to confirm you're okay. Miss the ping? We'll send gentle reminders. Still no
+                response by the deadline? Your emergency contacts get alerted.</p>
+
+            <p style="font-size: 14px; margin-top: 10px;">Free forever. <a
+                    href="https://github.com/micr0-dev/wellness-ping">Open source</a>.</p>
         </div>
     </details>
+
+    <details style="margin-top: 15px;">
+        <summary style="cursor: pointer; font-weight: bold; padding: 10px; background: #f9f9f9;">Features (click to
+            expand)</summary>
+        <div style="background: #f9f9f9; padding: 15px; border-left: 3px solid #333;">
+            <p><strong>Core features:</strong></p>
+            <ul style="margin: 5px 0 15px 20px;">
+                <li><strong>Flexible scheduling:</strong> Daily or weekly check-ins at your preferred time</li>
+                <li><strong>Gentle reminders:</strong> Multiple reminders before contacts are alerted</li>
+                <li><strong>Multiple check-in methods:</strong> Click link or reply "PONG" to email</li>
+                <li><strong>Custom alert messages:</strong> Add instructions for emergency contacts</li>
+            </ul>
+
+            <p><strong>Security features (optional):</strong></p>
+            <ul style="margin: 5px 0 15px 20px;">
+                <li><strong>PIN authentication:</strong> Require a PIN code to check in (prevents email spoofing)</li>
+                <li><strong>Duress PIN:</strong> A second PIN that looks normal but secretly alerts contacts you're in
+                    danger</li>
+            </ul>
+
+            <p style="font-size: 13px; color: #666; margin-top: 10px;">All security features are optional. The service
+                works great with just email - add PINs only if you need extra protection.</p>
+        </div>
+    </details>
+
     <details style="margin-top: 15px;">
         <summary style="cursor: pointer; font-weight: bold; padding: 10px; background: #f9f9f9;">Privacy & Security
             (click to expand)</summary>
@@ -44,6 +77,7 @@
                 <li>Emergency contact emails</li>
                 <li>Check-in frequency and time preferences</li>
                 <li>Last check-in timestamp</li>
+                <li>Hashed PINs (if enabled, never stored in plaintext)</li>
             </ul>
 
             <p><strong>What we DON'T store:</strong></p>
@@ -75,9 +109,11 @@
     </details>
 
     <footer style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
-        <p style="font-size: 12px; color: #666;">
-            Questions? <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
-            <a href="https://github.com/micr0-dev/wellness-ping">View source on GitHub</a> |
+        <p style="font-size: 14px; color: #666;">
+            Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
+            Feature requests: <a href="mailto:micr0@micr0.dev">micr0@micr0.dev</a> |
+            Donate: <a href="https://ko-fi.com/micr0">Ko-fi</a>, <a href="https://github.com/sponsors/micr0-dev">GitHub
+                Sponsors</a> |
             Version: {{.Version}}
         </p>
     </footer>

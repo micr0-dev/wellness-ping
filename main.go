@@ -14,9 +14,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
-const VERSION = "1.0.4"
+const VERSION = "1.1.0"
 
 type User struct {
 	Email             string    `json:"email"`
@@ -29,6 +31,10 @@ type User struct {
 	Active            bool      `json:"active"`
 	Token             string    `json:"token"`
 	AlertSent         bool      `json:"alert_sent"`
+	PINEnabled        bool      `json:"pin_enabled"`
+	PINHash           string    `json:"pin_hash"`
+	DuressPINHash     string    `json:"duress_pin_hash"`
+	CustomAlertMsg    string    `json:"custom_alert_msg"`
 }
 
 type PendingVerification struct {
@@ -73,6 +79,7 @@ func main() {
 	http.HandleFunc("/settings", settingsHandler)
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/pong", pongHandler)
+	http.HandleFunc("/check-pin", checkPinHandler)
 	http.HandleFunc("/inbound", inboundEmailHandler)
 	http.HandleFunc("/test-ping", testPingHandler)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
@@ -88,7 +95,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		"Version": VERSION,
 	}
 	tmpl := template.Must(template.ParseFiles("templates/index.html"))
-
 	tmpl.Execute(w, data)
 }
 
@@ -312,6 +318,54 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	utcTime := localTime.UTC()
 	checkInHourUTC := utcTime.Hour()
 
+	// Handle PIN settings
+	pinEnabled := r.FormValue("pin_enabled") == "on"
+	var pinHash, duressPinHash string
+
+	if pinEnabled {
+		pin := r.FormValue("pin")
+		duressPin := r.FormValue("duress_pin")
+
+		if pin == "" {
+			http.Error(w, "PIN cannot be empty when PIN is enabled", http.StatusBadRequest)
+			return
+		}
+
+		if len(pin) < 4 || len(pin) > 8 {
+			http.Error(w, "PIN must be 4-8 digits", http.StatusBadRequest)
+			return
+		}
+
+		// Using email as extra salt for security
+		hash, err := bcrypt.GenerateFromPassword([]byte(email+":"+pin), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "Error hashing PIN", http.StatusInternalServerError)
+			return
+		}
+		pinHash = string(hash)
+
+		if duressPin != "" {
+			if len(duressPin) < 4 || len(duressPin) > 8 {
+				http.Error(w, "Duress PIN must be 4-8 digits", http.StatusBadRequest)
+				return
+			}
+			if duressPin == pin {
+				http.Error(w, "Duress PIN must be different from normal PIN", http.StatusBadRequest)
+				return
+			}
+
+			// Using email as extra salt for security
+			hash, err := bcrypt.GenerateFromPassword([]byte(email+":"+duressPin), bcrypt.DefaultCost)
+			if err != nil {
+				http.Error(w, "Error hashing duress PIN", http.StatusInternalServerError)
+				return
+			}
+			duressPinHash = string(hash)
+		}
+	}
+
+	customAlertMsg := strings.TrimSpace(r.FormValue("custom_alert_msg"))
+
 	token := generateToken()
 
 	user := &User{
@@ -325,6 +379,10 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		Active:            true,
 		Token:             token,
 		AlertSent:         false,
+		PINEnabled:        pinEnabled,
+		PINHash:           pinHash,
+		DuressPINHash:     duressPinHash,
+		CustomAlertMsg:    customAlertMsg,
 	}
 
 	store.mu.Lock()
@@ -379,34 +437,94 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := r.URL.Query().Get("token")
 
-	store.mu.Lock()
+	store.mu.RLock()
 	var foundUser *User
-	var wasAlerted bool
-
 	for _, user := range store.Users {
 		if user.Token == token {
 			foundUser = user
-			wasAlerted = user.AlertSent
-			user.LastPing = time.Now()
-			user.LastReminderNum = 0
-			user.AlertSent = false
 			break
 		}
 	}
-	store.mu.Unlock()
+	store.mu.RUnlock()
 
 	if foundUser == nil {
 		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
 	}
 
-	saveStore()
-
-	if wasAlerted {
-		sendAllClearEmail(foundUser)
+	// If PIN is enabled, show PIN entry page
+	if foundUser.PINEnabled {
+		data := map[string]string{
+			"Token": token,
+		}
+		tmpl := template.Must(template.ParseFiles("templates/pin_entry.html"))
+		tmpl.Execute(w, data)
+		return
 	}
 
+	// No PIN required, check in directly
+	processPongCheckIn(foundUser, false)
 	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+}
+
+func checkPinHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := r.FormValue("token")
+	pin := r.FormValue("pin")
+
+	store.mu.RLock()
+	var foundUser *User
+	for _, user := range store.Users {
+		if user.Token == token {
+			foundUser = user
+			break
+		}
+	}
+	store.mu.RUnlock()
+
+	if foundUser == nil {
+		http.Error(w, "Invalid token", http.StatusBadRequest)
+		return
+	}
+
+	// Check normal PIN
+	if bcrypt.CompareHashAndPassword([]byte(foundUser.PINHash), []byte(foundUser.Email+":"+pin)) == nil {
+		processPongCheckIn(foundUser, false)
+		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+		return
+	}
+
+	// Check duress PIN
+	if foundUser.DuressPINHash != "" && bcrypt.CompareHashAndPassword([]byte(foundUser.DuressPINHash), []byte(foundUser.Email+":"+pin)) == nil {
+		processPongCheckIn(foundUser, true)
+		// Show normal confirmation to not alert the attacker
+		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+		return
+	}
+
+	// Invalid PIN
+	http.Error(w, "Invalid PIN", http.StatusUnauthorized)
+}
+
+func processPongCheckIn(user *User, isDuress bool) {
+	store.mu.Lock()
+	wasAlerted := user.AlertSent
+	user.LastPing = time.Now()
+	user.LastReminderNum = 0
+	user.AlertSent = false
+	store.mu.Unlock()
+
+	saveStore()
+
+	if isDuress {
+		sendDuressAlert(user)
+	} else if wasAlerted {
+		sendAllClearEmail(user)
+	}
 }
 
 func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
@@ -572,6 +690,16 @@ func pingScheduler() {
 						continue
 					}
 				}
+			} else {
+				if timeSinceLastPing >= pingInterval && now.Hour() >= user.CheckInHour {
+					store.mu.Lock()
+					user.LastReminderNum = 0
+					user.CurrentCycleStart = time.Now()
+					store.mu.Unlock()
+					sendPing(user, 0)
+					needsSave = true
+					continue
+				}
 			}
 
 			if !user.CurrentCycleStart.IsZero() && user.LastPing.Before(user.CurrentCycleStart) {
@@ -638,7 +766,28 @@ func sendPing(user *User, reminderNum int) {
 
 func sendAlert(user *User) {
 	subject := fmt.Sprintf("Wellness Alert - %s Not Responding", user.Email)
-	body := fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
+
+	var body string
+	if user.CustomAlertMsg != "" {
+		body = fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\n%s\n\nPlease check in on them to ensure they're okay.", user.Email, user.CustomAlertMsg)
+	} else {
+		body = fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
+	}
+
+	for _, alertEmail := range user.AlertEmails {
+		sendEmail(alertEmail, subject, body)
+	}
+}
+
+func sendDuressAlert(user *User) {
+	subject := fmt.Sprintf("DURESS ALERT - %s", user.Email)
+
+	var body string
+	if user.CustomAlertMsg != "" {
+		body = fmt.Sprintf("CRITICAL: %s has checked in using their duress PIN.\n\nThis indicates they may be in danger or under coercion.\n\nDO NOT contact them directly. Follow your emergency procedures\n\n%s", user.Email, user.CustomAlertMsg)
+	} else {
+		body = fmt.Sprintf("CRITICAL: %s has checked in using their duress PIN.\n\nThis indicates they may be in danger or under coercion.\n\nDO NOT contact them directly. Follow your emergency procedures.", user.Email)
+	}
 
 	for _, alertEmail := range user.AlertEmails {
 		sendEmail(alertEmail, subject, body)
