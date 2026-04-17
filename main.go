@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -85,16 +86,21 @@ func main() {
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	data := map[string]string{
-		"Version": VERSION,
+		"Version":          VERSION,
+		"TurnstileSiteKey": os.Getenv("TURNSTILE_SITE_KEY"),
 	}
 	tmpl := template.Must(template.ParseFiles("templates/index.html"))
-
 	tmpl.Execute(w, data)
 }
 
 func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	if !verifyTurnstile(r.FormValue("cf-turnstile-response")) {
+		http.Error(w, "CAPTCHA verification failed. Please try again.", http.StatusBadRequest)
 		return
 	}
 
@@ -822,4 +828,40 @@ func saveStore() {
 
 	data, _ := json.MarshalIndent(store, "", "  ")
 	os.WriteFile("data/users.json", data, 0644)
+}
+
+func verifyTurnstile(token string) bool {
+	secret := os.Getenv("TURNSTILE_SECRET_KEY")
+	if secret == "" {
+		log.Println("TURNSTILE_SECRET_KEY not set, rejecting signup")
+		return false
+	}
+	if token == "" {
+		return false
+	}
+
+	form := url.Values{}
+	form.Set("secret", secret)
+	form.Set("response", token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", form)
+	if err != nil {
+		log.Printf("Turnstile verify error: %v", err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success    bool     `json:"success"`
+		ErrorCodes []string `json:"error-codes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("Turnstile decode error: %v", err)
+		return false
+	}
+	if !result.Success {
+		log.Printf("Turnstile verification failed: %v", result.ErrorCodes)
+	}
+	return result.Success
 }
