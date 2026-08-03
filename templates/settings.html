@@ -31,6 +31,7 @@
     <p><b>Alert Emails:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
     <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
     <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
+    {{if .User.PausedUntil}}<p><b>⏸️ Vacation Pause:</b> Active until {{.User.PausedUntil}}</p>{{end}}
     <br>
     {{end}}
 
@@ -72,7 +73,49 @@
         </select><br><br>
 
         <label>Preferred Check-in Time (your local time):</label><br>
-        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br>
+        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br><br>
+
+        <!-- v2.0: Security features -->
+        <details>
+            <summary><b>🔒 Security Options (v2.0)</b></summary>
+            <br>
+            <label>Duress PIN (silent alert when forced to check-in):</label><br>
+            <input type="password" name="duress_pin" placeholder="Enter a secret PIN" value="{{if .User}}{{.User.DuressPin}}{{end}}"><br>
+            <small style="color: #666;">If someone forces you to check in, enter this PIN instead. It will silently alert your contacts.</small><br><br>
+
+            <label>Quick Check-in PIN (check in without email link):</label><br>
+            <input type="password" name="checkin_pin" placeholder="Enter a PIN for quick check-in" value="{{if .User}}{{.User.CheckInPin}}{{end}}"><br>
+            <small style="color: #666;">Set a PIN to check in directly at /pong?pin=YOUR_PIN without waiting for email.</small><br><br>
+
+            <label>Security Tier:</label><br>
+            <select name="security_tier">
+                <option value="basic" {{if .User}}{{if eq .User.SecurityTier "basic"}}selected{{end}}{{else}}selected{{end}}>Basic (default)</option>
+                <option value="high" {{if .User}}{{if eq .User.SecurityTier "high"}}selected{{end}}{{end}}>High (enhanced protection)</option>
+            </select><br>
+            <small style="color: #666;">High tier adds extra verification and stricter token validation.</small><br>
+        </details><br>
+
+        <!-- v2.0: Vacation pause -->
+        <details>
+            <summary><b>✈️ Vacation / Travel Mode (v2.0)</b></summary>
+            <br>
+            <label>Pause check-ins until (optional):</label><br>
+            <input type="datetime-local" name="paused_until" value="{{if .User}}{{if .User.PausedUntil}}{{.User.PausedUntil.Format "2006-01-02T15:04"}}{{end}}{{end}}"><br>
+            <small style="color: #666;">Set an end date/time. Check-ins will be disabled until then, then auto-resume.</small><br>
+        </details><br>
+
+        <!-- v2.0: Custom messages -->
+        <details>
+            <summary><b>✉️ Custom Alert Messages (v2.0)</b></summary>
+            <br>
+            <label>Custom Alert Message (what contacts receive when you don't check in):</label><br>
+            <textarea name="alert_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AlertMessage}}{{end}}</textarea><br>
+            <small style="color: #666;">Your custom message will be sent to emergency contacts if you miss check-ins.</small><br><br>
+
+            <label>Custom All-Clear Message:</label><br>
+            <textarea name="all_clear_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AllClearMessage}}{{end}}</textarea><br>
+            <small style="color: #666;">Sent to contacts when you check in after an alert was sent.</small>
+        </details><br>
 
         <button type="submit" name="action" value="save">Save Settings</button><br><br>
 

@@ -30,6 +30,13 @@ type User struct {
 	Active            bool      `json:"active"`
 	Token             string    `json:"token"`
 	AlertSent         bool      `json:"alert_sent"`
+	// v2.0 features
+	DuressPin         string    `json:"duress_pin,omitempty"`
+	CheckInPin        string    `json:"checkin_pin,omitempty"`
+	PausedUntil       *time.Time `json:"paused_until,omitempty"`
+	AlertMessage      string    `json:"alert_message,omitempty"`
+	AllClearMessage   string    `json:"all_clear_message,omitempty"`
+	SecurityTier      string    `json:"security_tier,omitempty"` // "basic" or "high"
 }
 
 type PendingVerification struct {
@@ -320,6 +327,40 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := generateToken()
 
+	// v2.0: Parse new fields
+	duressPin := strings.TrimSpace(r.FormValue("duress_pin"))
+	checkinPin := strings.TrimSpace(r.FormValue("checkin_pin"))
+	securityTier := r.FormValue("security_tier")
+	if securityTier != "high" {
+		securityTier = "basic"
+	}
+	alertMessage := strings.TrimSpace(r.FormValue("alert_message"))
+	allClearMessage := strings.TrimSpace(r.FormValue("all_clear_message"))
+
+	// v2.0: Parse paused_until
+	var pausedUntil *time.Time
+	pausedUntilStr := r.FormValue("paused_until")
+	if pausedUntilStr != "" {
+		parsedTime, err := time.Parse("2006-01-02T15:04", pausedUntilStr)
+		if err == nil && parsedTime.After(time.Now()) {
+			pt := parsedTime
+			pausedUntil = &pt
+		}
+	}
+
+	// Preserve existing PINs if not changed
+	store.mu.RLock()
+	existingUser := store.Users[email]
+	store.mu.RUnlock()
+	if existingUser != nil {
+		if duressPin == "" {
+			duressPin = existingUser.DuressPin
+		}
+		if checkinPin == "" {
+			checkinPin = existingUser.CheckInPin
+		}
+	}
+
 	user := &User{
 		Email:             email,
 		AlertEmails:       alertEmails,
@@ -331,6 +372,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		Active:            true,
 		Token:             token,
 		AlertSent:         false,
+		DuressPin:         duressPin,
+		CheckInPin:        checkinPin,
+		SecurityTier:      securityTier,
+		AlertMessage:      alertMessage,
+		AllClearMessage:   allClearMessage,
+		PausedUntil:       pausedUntil,
 	}
 
 	store.mu.Lock()
@@ -384,31 +431,57 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expires", "0")
 
 	token := r.URL.Query().Get("token")
+	pin := r.URL.Query().Get("pin") // v2.0: PIN-based check-in or duress
 
 	store.mu.Lock()
 	var foundUser *User
-	var wasAlerted bool
+	var isDuress bool
 
 	for _, user := range store.Users {
+		// Check for duress PIN first
+		if user.DuressPin != "" && pin == user.DuressPin {
+			isDuress = true
+			foundUser = user
+			break
+		}
+		// Check for regular check-in PIN
+		if user.CheckInPin != "" && pin == user.CheckInPin {
+			foundUser = user
+			break
+		}
+		// Check for token-based check-in
 		if user.Token == token {
 			foundUser = user
-			wasAlerted = user.AlertSent
-			user.LastPing = time.Now()
-			user.LastReminderNum = 0
-			user.AlertSent = false
 			break
 		}
 	}
 	store.mu.Unlock()
 
 	if foundUser == nil {
-		http.Error(w, "Invalid token", http.StatusBadRequest)
+		http.Error(w, "Invalid token or PIN", http.StatusBadRequest)
 		return
 	}
 
+	// Handle duress PIN - silently alert immediately
+	if isDuress {
+		log.Printf("DURESS: User %s triggered duress PIN", foundUser.Email)
+		sendAlert(foundUser)
+		// Show fake "OK" page to observer
+		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+		return
+	}
+
+	// Normal check-in processing
+	store.mu.Lock()
+	foundUser.LastPing = time.Now()
+	foundUser.LastReminderNum = 0
+	foundUser.AlertSent = false
+	wasAlertedBefore := foundUser.AlertSent
+	store.mu.Unlock()
+
 	saveStore()
 
-	if wasAlerted {
+	if wasAlertedBefore {
 		sendAllClearEmail(foundUser)
 	}
 
@@ -520,6 +593,17 @@ func pingScheduler() {
 		for _, user := range users {
 			if !user.Active {
 				continue
+			}
+
+			// v2.0: Skip if user is paused (vacation/travel mode)
+			if user.PausedUntil != nil && time.Now().Before(*user.PausedUntil) {
+				continue
+			}
+			if user.PausedUntil != nil && time.Now().After(*user.PausedUntil) {
+				// Auto-resume after pause expires
+				user.PausedUntil = nil
+				log.Printf("Auto-resuming user %s after vacation pause", user.Email)
+				needsSave = true
 			}
 
 			var pingInterval time.Duration
@@ -644,7 +728,11 @@ func sendPing(user *User, reminderNum int) {
 
 func sendAlert(user *User) {
 	subject := fmt.Sprintf("Wellness Alert - %s Not Responding", user.Email)
-	body := fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
+	// v2.0: Use custom message if set, otherwise default
+	body := user.AlertMessage
+	if body == "" {
+		body = fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
+	}
 
 	for _, alertEmail := range user.AlertEmails {
 		sendEmail(alertEmail, subject, body)
@@ -653,7 +741,11 @@ func sendAlert(user *User) {
 
 func sendAllClearEmail(user *User) {
 	subject := fmt.Sprintf("All Clear - %s Checked In", user.Email)
-	body := fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
+	// v2.0: Use custom message if set, otherwise default
+	body := user.AllClearMessage
+	if body == "" {
+		body = fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
+	}
 
 	for _, alertEmail := range user.AlertEmails {
 		sendEmail(alertEmail, subject, body)
