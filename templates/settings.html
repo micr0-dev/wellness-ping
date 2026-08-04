@@ -22,7 +22,20 @@
     </div>
     {{end}}
 
+    {{if .DuressActive}}
+    <div class="raised">
+        <p><b>A duress check-in was recorded.</b> Your contacts have been alerted and
+        reminders are suppressed, so nothing on this account looks out of the ordinary.
+        Clear this only when it is safe to do so.</p>
+        <form action="/update" method="POST">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <button type="submit" class="ghost" name="action" value="clear_duress">Clear duress state</button>
+        </form>
+    </div>
+    {{end}}
+
     <form action="/update" method="POST">
+        <input type="hidden" name="csrf" id="csrf" value="{{.CSRF}}">
         <input type="hidden" name="email" value="{{.Email}}">
 
         {{if .User}}
@@ -79,7 +92,7 @@
         <!-- Check-in PIN + Duress PIN -->
         <div class="secmodule greyed" id="pin-mod">
             <label class="mod-check">
-                <input type="checkbox" name="pin_enable" value="1" id="pin_enable" onchange="toggleModule('pin')" {{if .PinEnabled}}checked{{end}}>
+                <input type="checkbox" name="pin_enable" value="1" id="pin_enable" {{if .PinEnabled}}checked{{end}}>
                 <span>Check-in PIN &amp; Duress PIN</span>
             </label>
             <div class="secmod-body" id="pin-body">
@@ -95,20 +108,20 @@
         <!-- Authenticator App (2FA) -->
         <div class="secmodule greyed" id="totp-mod">
             <label class="mod-check">
-                <input type="checkbox" name="totp_enable" value="1" id="totp_enable" onchange="toggleModule('totp')" {{if .TOTPEnabled}}checked{{end}}>
+                <input type="checkbox" name="totp_enable" value="1" id="totp_enable" {{if .TOTPEnabled}}checked{{end}}>
                 <span>Authenticator App (2FA)</span>
             </label>
             <div class="secmod-body" id="totp-body">
                 <p class="muted">Requires a 6-digit code from your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
                 {{if .TOTPConfigured}}
                 <p>{{if .TOTPEnabled}}<span class="ok">Enabled</span>, a code is required to sign in and to check in{{else}}<span class="off">Set up but currently off</span>, tick the box and save to require it{{end}}</p>
-                <button type="button" class="ghost" onclick="location.href='/totp-setup'">Reconfigure</button>
+                <button type="button" class="ghost" data-nav="/totp-setup">Reconfigure</button>
                 <button type="submit" class="danger" name="action" value="clear_totp">Clear 2FA</button>
                 {{else if not .User}}
                 <p class="muted">Save your settings first, then you can set up 2FA.</p>
                 {{else}}
                 <p class="muted">Not set up.</p>
-                <button type="button" class="ghost" onclick="location.href='/totp-setup'">Set up Authenticator App</button>
+                <button type="button" class="ghost" data-nav="/totp-setup">Set up Authenticator App</button>
                 {{end}}
             </div>
         </div>
@@ -116,21 +129,21 @@
         <!-- Passkey -->
         <div class="secmodule greyed" id="passkey-mod">
             <label class="mod-check">
-                <input type="checkbox" name="passkey_enable" value="1" id="passkey_enable" onchange="toggleModule('passkey')" {{if .PasskeyEnabled}}checked{{end}}>
+                <input type="checkbox" name="passkey_enable" value="1" id="passkey_enable" {{if .PasskeyEnabled}}checked{{end}}>
                 <span>Passkey</span>
             </label>
             <div class="secmod-body" id="passkey-body">
                 <p class="muted">Requires a passkey (platform authenticator, security key, or phone).</p>
                 {{if .PasskeyConfigured}}
                 <p>{{if .PasskeyEnabled}}<span class="ok">Enabled</span>, a passkey is required to sign in and to check in{{else}}<span class="off">Registered but currently off</span>, tick the box and save to require it{{end}}</p>
-                <button type="button" class="ghost" onclick="registerPasskey()">Re-register Passkey</button>
+                <button type="button" class="ghost" data-action="register-passkey">Re-register Passkey</button>
                 <button type="submit" class="danger" name="action" value="clear_passkey">Remove Passkey</button>
                 <span id="passkey-status" class="muted"></span>
                 {{else if not .User}}
                 <p class="muted">Save your settings first, then you can register a passkey.</p>
                 {{else}}
                 <p class="muted">Not set up.</p>
-                <button type="button" class="ghost" onclick="registerPasskey()">Register Passkey</button>
+                <button type="button" class="ghost" data-action="register-passkey">Register Passkey</button>
                 <span id="passkey-status" class="muted"></span>
                 {{end}}
             </div>
@@ -155,6 +168,21 @@
             </div>
         </details>
 
+
+        {{if .ContactStatuses}}
+        <details>
+            <summary>Contact delivery status</summary>
+            <div class="details-body">
+                <p class="muted">The result of the last message we tried to send to each
+                contact. A contact that never receives anything is the one failure this
+                service cannot afford, so check here after saving.</p>
+                {{range .ContactStatuses}}
+                <p><b>{{.Contact}}</b>: {{.Status}}</p>
+                {{end}}
+            </div>
+        </details>
+        {{end}}
+
         <div class="btn-row">
             <button type="submit" name="action" value="save">Save Settings</button>
             {{if .User}}
@@ -174,82 +202,8 @@
         Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.</div>
     </footer>
 
-    <script>
-        function toggleModule(name) {
-            const box = document.getElementById(name + '_enable');
-            const body = document.getElementById(name + '-body');
-            const module = document.getElementById(name + '-mod');
-            const enabled = box.checked;
-            if (enabled) {
-                module.classList.remove('greyed');
-            } else {
-                module.classList.add('greyed');
-            }
-            const controls = body.querySelectorAll('input, textarea');
-            controls.forEach(el => {
-                if (enabled) { el.removeAttribute('disabled'); } else { el.setAttribute('disabled', 'disabled'); }
-            });
-        }
-
-        function b64urlToBuf(b64) {
-            b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
-            const bin = atob(b64);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            return bytes;
-        }
-        function bufToB64url(buf) {
-            const bytes = new Uint8Array(buf);
-            let bin = '';
-            for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        }
-
-        async function registerPasskey() {
-            const status = document.getElementById('passkey-status');
-            status.textContent = 'Contacting server...';
-            try {
-                const optsResp = await fetch('/passkey-register-begin');
-                if (!optsResp.ok) { status.textContent = await optsResp.text(); return; }
-                const options = await optsResp.json();
-                options.publicKey.challenge = b64urlToBuf(options.publicKey.challenge);
-                options.publicKey.user.id = b64urlToBuf(options.publicKey.user.id);
-
-                const cred = await navigator.credentials.create(options);
-
-                const payload = {
-                    id: cred.id,
-                    rawId: bufToB64url(cred.rawId),
-                    type: cred.type,
-                    response: {
-                        clientDataJSON: bufToB64url(cred.response.clientDataJSON),
-                        attestationObject: bufToB64url(cred.response.attestationObject),
-                    },
-                    extensions: cred.getClientExtensionResults()
-                };
-
-                const resp = await fetch('/passkey-register-finish', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (resp.ok) {
-                    status.textContent = 'Passkey registered!';
-                    setTimeout(() => location.reload(), 800);
-                } else {
-                    status.textContent = await resp.text();
-                }
-            } catch (e) {
-                status.textContent = 'Passkey failed: ' + e.message;
-            }
-        }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            if (document.getElementById('pin_enable').checked) toggleModule('pin');
-            if (document.getElementById('totp_enable').checked) toggleModule('totp');
-            if (document.getElementById('passkey_enable').checked) toggleModule('passkey');
-        });
-    </script>
+    <script src="/static/webauthn.js"></script>
+    <script src="/static/settings.js"></script>
     <script src="/static/version.js"></script>
 </body>
 </html>

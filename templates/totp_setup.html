@@ -20,6 +20,7 @@
     <code class="manual-code">{{.Secret}}</code>
 
     <form action="/totp-verify" method="POST">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
         <input type="hidden" name="secret" value="{{.Secret}}">
         <label for="code">Enter the 6-digit code from your app</label>
         <input type="text" id="code" name="code" class="otp-input" pattern="[0-9]{6}" placeholder="123456" required maxlength="6">

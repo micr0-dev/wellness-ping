@@ -11,7 +11,7 @@
 <body>
     <h1>Verification Required</h1>
     <p>Use your passkey to continue.</p>
-    <button id="passkey-btn" type="button">Use Passkey</button>
+    <button id="passkey-btn" type="button" data-token="{{.Token}}" data-action="{{.Action}}">Use Passkey</button>
     <p id="status" class="muted"></p>
 
     <p><a href="/">Back to home</a></p>
@@ -20,70 +20,8 @@
 
     <script src="/static/version.js"></script>
 
-    <script>
-        const token = "{{.Token}}";
-        const action = "{{.Action}}";
-
-        function b64urlToBuf(b64) {
-            b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
-            const bin = atob(b64);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            return bytes;
-        }
-        function bufToB64url(buf) {
-            const bytes = new Uint8Array(buf);
-            let bin = '';
-            for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        }
-
-        async function startPasskey() {
-            const status = document.getElementById('status');
-            status.textContent = 'Contacting server...';
-            try {
-                const optsResp = await fetch('/passkey-login-begin?token=' + encodeURIComponent(token));
-                if (!optsResp.ok) throw new Error(await optsResp.text());
-                const options = await optsResp.json();
-                options.publicKey.challenge = b64urlToBuf(options.publicKey.challenge);
-                if (options.publicKey.allowCredentials) {
-                    options.publicKey.allowCredentials.forEach(c => { c.id = b64urlToBuf(c.id); });
-                }
-
-                const cred = await navigator.credentials.get(options);
-
-                const payload = {
-                    id: cred.id,
-                    rawId: bufToB64url(cred.rawId),
-                    type: cred.type,
-                    response: {
-                        clientDataJSON: bufToB64url(cred.response.clientDataJSON),
-                        authenticatorData: bufToB64url(cred.response.authenticatorData),
-                        signature: bufToB64url(cred.response.signature),
-                    },
-                    extensions: cred.getClientExtensionResults()
-                };
-                if (cred.response.userHandle) {
-                    payload.response.userHandle = bufToB64url(cred.response.userHandle);
-                }
-
-                const resp = await fetch('/passkey-login-finish?token=' + encodeURIComponent(token), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (resp.ok) {
-                    window.location.href = action;
-                } else {
-                    status.textContent = await resp.text();
-                }
-            } catch (e) {
-                status.textContent = 'Passkey failed: ' + e.message;
-            }
-        }
-
-        document.getElementById('passkey-btn').addEventListener('click', startPasskey);
-    </script>
+    <script src="/static/webauthn.js"></script>
+    <script src="/static/passkey-login.js"></script>
 </body>
 
 </html>

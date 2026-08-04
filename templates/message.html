@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>{{.Title}}</h1>
+    <p>{{.Body}}</p>
+
+    {{range .Links}}
+    <p><a href="{{.Href}}">{{.Label}}</a></p>
+    {{end}}
+
+    <footer>Version: <span class="version">{{.Version}}</span></footer>
+    <script src="/static/version.js"></script>
+</body>
+
+</html>

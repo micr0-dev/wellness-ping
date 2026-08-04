@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Confirm - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>Confirm you're okay</h1>
+    <p>Press the button below to complete your check-in.</p>
+
+    <form action="{{.Action}}" method="POST">
+        <input type="hidden" name="step" value="confirm">
+        <button type="submit">Yes, I'm okay</button>
+    </form>
+
+    <p class="note">This step is deliberate. Nothing is confirmed just by opening this
+    page, so a link scanner or mail filter following the link cannot check in on your behalf.</p>
+
+    <p class="back-link"><a href="/">Back to home</a></p>
+
+    <footer>Version: <span class="version">{{.Version}}</span></footer>
+    <script src="/static/version.js"></script>
+</body>
+
+</html>
