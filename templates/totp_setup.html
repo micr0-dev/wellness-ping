@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Authenticator App - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>Setup Authenticator App</h1>
+    <p>Scan the QR code below with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
+    
+    <div style="text-align: center; margin: 20px 0;">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{.QRURL}}" alt="QR Code" style="border: 2px solid #ddd; padding: 10px;">
+    </div>
+    
+    <p><b>Or enter this code manually:</b></p>
+    <code style="background: #f4f4f4; padding: 10px; display: block; word-break: break-all;">{{.Secret}}</code>
+    
+    <br>
+    <form action="/totp-verify" method="POST">
+        <input type="hidden" name="secret" value="{{.Secret}}">
+        <label>Enter the 6-digit code from your app:</label><br>
+        <input type="text" name="code" pattern="[0-9]{6}" placeholder="123456" required maxlength="6" style="font-size: 18px; letter-spacing: 5px; text-align: center;"><br><br>
+        <button type="submit">Verify and Enable</button>
+    </form>
+    
+    <br>
+    <a href="/settings">Cancel</a>
+
+    <hr>
+    <footer>
+        Version: {{.Version}} |
+        <a href="/settings">Back to Settings</a>
+    </footer>
+</body>
+
+</html>

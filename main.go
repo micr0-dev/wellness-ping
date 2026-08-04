@@ -16,28 +16,35 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pquerna/otp/totp"
 )
 
 const VERSION = "2.0.0"
 
+// SecurityModule represents an enabled security requirement
+type SecurityModule struct {
+	Enabled    bool      `json:"enabled"`
+	ModuleType string    `json:"module_type"` // "pin", "duress", "totp", "passkey"
+	Config     string    `json:"config,omitempty"` // Module-specific config (hashed PIN, TOTP secret, etc.)
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type User struct {
-	Email             string    `json:"email"`
-	AlertEmails       []string  `json:"alert_emails"`
-	PingFrequency     string    `json:"ping_frequency"`
-	CheckInHour       int       `json:"checkin_hour"`
-	LastPing          time.Time `json:"last_ping"`
-	CurrentCycleStart time.Time `json:"current_cycle_start"`
-	LastReminderNum   int       `json:"last_reminder_num"`
-	Active            bool      `json:"active"`
-	Token             string    `json:"token"`
-	AlertSent         bool      `json:"alert_sent"`
-	// 2FA / Security features
-	DuressPin         string    `json:"duress_pin,omitempty"`
-	PausedUntil       *time.Time `json:"paused_until,omitempty"`
-	AlertMessage      string    `json:"alert_message,omitempty"`
-	AllClearMessage   string    `json:"all_clear_message,omitempty"`
-	TOTPSecret        string    `json:"totp_secret,omitempty"`
-	RequireTOTP       bool      `json:"require_totp,omitempty"`
+	Email           string           `json:"email"`
+	AlertEmails     []string         `json:"alert_emails"`
+	PingFrequency   string           `json:"ping_frequency"`
+	CheckInHour     int              `json:"checkin_hour"`
+	LastPing        time.Time        `json:"last_ping"`
+	CurrentCycleStart time.Time      `json:"current_cycle_start"`
+	LastReminderNum int              `json:"last_reminder_num"`
+	Active          bool             `json:"active"`
+	Token           string           `json:"token"`
+	AlertSent       bool             `json:"alert_sent"`
+	PausedUntil     *time.Time       `json:"paused_until,omitempty"`
+	AlertMessage    string           `json:"alert_message,omitempty"`
+	AllClearMessage string           `json:"all_clear_message,omitempty"`
+	SecurityModules []SecurityModule `json:"security_modules"`
 }
 
 type PendingVerification struct {
@@ -66,7 +73,6 @@ var store = &Store{
 }
 
 func main() {
-	// Parse command line flags
 	port := flag.Int("port", 8080, "Port to listen on")
 	flag.Parse()
 
@@ -88,6 +94,10 @@ func main() {
 	http.HandleFunc("/pong", pongHandler)
 	http.HandleFunc("/inbound", inboundEmailHandler)
 	http.HandleFunc("/test-ping", testPingHandler)
+	http.HandleFunc("/totp-setup", totpSetupHandler)
+	http.HandleFunc("/totp-verify", totpVerifyHandler)
+	http.HandleFunc("/pin-setup", pinSetupHandler)
+	http.HandleFunc("/pin-verify", pinVerifyHandler)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	go pingScheduler()
@@ -333,8 +343,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := generateToken()
 
-	// Parse new fields
-	duressPin := strings.TrimSpace(r.FormValue("duress_pin"))
+	// Parse custom messages
 	alertMessage := strings.TrimSpace(r.FormValue("alert_message"))
 	allClearMessage := strings.TrimSpace(r.FormValue("all_clear_message"))
 
@@ -349,23 +358,14 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse TOTP enable
-	requireTOTP := r.FormValue("require_totp") == "true"
-
-	// Preserve existing duress PIN if not changed
+	// Preserve existing security modules
 	store.mu.RLock()
 	existingUser := store.Users[email]
 	store.mu.RUnlock()
+	
+	var securityModules []SecurityModule
 	if existingUser != nil {
-		if duressPin == "" {
-			duressPin = existingUser.DuressPin
-		}
-	}
-
-	// Generate TOTP secret if enabling
-	var totpSecret string
-	if requireTOTP && (existingUser == nil || existingUser.TOTPSecret == "") {
-		totpSecret = generateTOTPSecret()
+		securityModules = existingUser.SecurityModules
 	}
 
 	user := &User{
@@ -379,12 +379,10 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		Active:            true,
 		Token:             token,
 		AlertSent:         false,
-		DuressPin:         duressPin,
 		AlertMessage:      alertMessage,
 		AllClearMessage:   allClearMessage,
 		PausedUntil:       pausedUntil,
-		TOTPSecret:        totpSecret,
-		RequireTOTP:       requireTOTP,
+		SecurityModules:   securityModules,
 	}
 
 	store.mu.Lock()
@@ -438,23 +436,15 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expires", "0")
 
 	token := r.URL.Query().Get("token")
-	pin := r.URL.Query().Get("pin")
-	totpCode := r.URL.Query().Get("totp")
 
 	store.mu.Lock()
 	var foundUser *User
-	var isDuress bool
+	var wasAlerted bool
 
 	for _, user := range store.Users {
-		// Check for duress PIN first
-		if user.DuressPin != "" && pin == user.DuressPin {
-			isDuress = true
-			foundUser = user
-			break
-		}
-		// Check for token-based check-in (always required)
 		if user.Token == token {
 			foundUser = user
+			wasAlerted = user.AlertSent
 			break
 		}
 	}
@@ -465,256 +455,301 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle duress PIN - silently alert immediately
-	if isDuress {
-		log.Printf("DURESS: User %s triggered duress PIN", foundUser.Email)
-		sendAlert(foundUser)
-		// Show fake "OK" page to observer
-		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
-		return
+	// Check each enabled security module
+	for _, module := range foundUser.SecurityModules {
+		if !module.Enabled {
+			continue
+		}
+
+		switch module.ModuleType {
+		case "duress":
+			// Duress PIN is handled via separate query param
+			duressPin := r.URL.Query().Get("duress")
+			if duressPin != "" && duressPin == module.Config {
+				// Duress triggered - silent alert
+				log.Printf("DURESS: User %s triggered duress PIN", foundUser.Email)
+				store.mu.Lock()
+				foundUser.AlertSent = true
+				store.mu.Unlock()
+				sendAlert(foundUser)
+				fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+				return
+			}
+		case "pin":
+			// Regular PIN check-in
+			pin := r.URL.Query().Get("pin")
+			if pin != "" && pin == module.Config {
+				// PIN verified, continue to next module
+				continue
+			}
+			http.Error(w, "PIN required for check-in", http.StatusUnauthorized)
+			return
+		case "totp":
+			// TOTP 2FA
+			totpCode := r.URL.Query().Get("totp")
+			if totpCode == "" {
+				http.Error(w, "TOTP code required. Check your authenticator app.", http.StatusUnauthorized)
+				return
+			}
+			if !totp.Validate(totpCode, module.Config) {
+				http.Error(w, "Invalid TOTP code", http.StatusUnauthorized)
+				return
+			}
+		case "passkey":
+			// Passkey verification (stub for now)
+			passkeyChallenge := r.URL.Query().Get("passkey")
+			if passkeyChallenge == "" {
+				http.Error(w, "Passkey authentication required", http.StatusUnauthorized)
+				return
+			}
+			// TODO: Implement proper WebAuthn verification
+			if passkeyChallenge != module.Config {
+				http.Error(w, "Invalid passkey", http.StatusUnauthorized)
+				return
+			}
+		}
 	}
 
-	// Check TOTP if required
-	if foundUser.RequireTOTP && foundUser.TOTPSecret != "" {
-		if totpCode == "" {
-			http.Error(w, "TOTP code required. Check your authenticator app.", http.StatusBadRequest)
-			return
-		}
-		if !verifyTOTP(foundUser.TOTPSecret, totpCode) {
-			http.Error(w, "Invalid TOTP code", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Normal check-in processing
+	// All security modules passed - complete check-in
 	store.mu.Lock()
 	foundUser.LastPing = time.Now()
 	foundUser.LastReminderNum = 0
 	foundUser.AlertSent = false
-	wasAlertedBefore := foundUser.AlertSent
 	store.mu.Unlock()
 
 	saveStore()
 
-	if wasAlertedBefore {
+	if wasAlerted {
 		sendAllClearEmail(foundUser)
 	}
 
 	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
 }
 
-func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	expectedSecret := os.Getenv("INBOUND_SECRET")
-	if expectedSecret == "" {
-		log.Printf("INBOUND_SECRET not set!")
-		http.Error(w, "Server configuration error", http.StatusInternalServerError)
-		return
-	}
-
-	providedSecret := r.URL.Query().Get("secret")
-	if providedSecret != expectedSecret {
-		log.Printf("Invalid inbound secret from IP: %s", r.RemoteAddr)
+func totpSetupHandler(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("session")
+	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	var inboundEmail struct {
-		From      string `json:"From"`
-		To        string `json:"To"`
-		Subject   string `json:"Subject"`
-		TextBody  string `json:"TextBody"`
-		HtmlBody  string `json:"HtmlBody"`
-		MessageID string `json:"MessageID"`
-	}
+	store.mu.RLock()
+	session, exists := store.Sessions[cookie.Value]
+	store.mu.RUnlock()
 
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&inboundEmail); err != nil {
-		log.Printf("Error decoding inbound email: %v", err)
-		http.Error(w, "Bad request", http.StatusBadRequest)
+	if !exists || time.Now().After(session.ExpiresAt) {
+		http.Error(w, "Session expired", http.StatusUnauthorized)
 		return
 	}
 
-	bodyText := strings.ToLower(inboundEmail.TextBody)
-	if !strings.Contains(bodyText, "pong") {
-		log.Printf("Email from %s doesn't contain PONG, ignoring", inboundEmail.From)
-		w.WriteHeader(http.StatusOK)
+	email := session.Email
+
+	store.mu.RLock()
+	user := store.Users[email]
+	store.mu.RUnlock()
+
+	if user == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
-	fromEmail := extractEmail(inboundEmail.From)
-	if fromEmail == "" {
-		log.Printf("Could not extract email from: %s", inboundEmail.From)
-		w.WriteHeader(http.StatusOK)
+	// Generate TOTP key
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "Wellness Ping",
+		AccountName: email,
+	})
+	if err != nil {
+		http.Error(w, "Failed to generate TOTP key", http.StatusInternalServerError)
+		return
+	}
+
+	// Return the key and URL
+	data := map[string]string{
+		"Secret":     key.Secret(),
+		"QRURL":      key.URL(),
+		"Email":      email,
+		"Version":    VERSION,
+	}
+
+	tmpl := template.Must(template.ParseFiles("templates/totp_setup.html"))
+	tmpl.Execute(w, data)
+}
+
+func totpVerifyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
+
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	store.mu.RLock()
+	session, exists := store.Sessions[cookie.Value]
+	store.mu.RUnlock()
+
+	if !exists || time.Now().After(session.ExpiresAt) {
+		http.Error(w, "Session expired", http.StatusUnauthorized)
+		return
+	}
+
+	email := session.Email
+	secret := r.FormValue("secret")
+	code := r.FormValue("code")
+
+	// Verify the code
+	if !totp.Validate(code, secret) {
+		http.Error(w, "Invalid code. Please try again.", http.StatusBadRequest)
+		return
+	}
+
+	// Enable TOTP module
+	store.mu.Lock()
+	user, exists := store.Users[email]
+	if !exists {
+		store.mu.Unlock()
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Add or update TOTP module
+	found := false
+	for i, mod := range user.SecurityModules {
+		if mod.ModuleType == "totp" {
+			user.SecurityModules[i].Config = secret
+			user.SecurityModules[i].Enabled = true
+			user.SecurityModules[i].CreatedAt = time.Now()
+			found = true
+			break
+		}
+	}
+	if !found {
+		user.SecurityModules = append(user.SecurityModules, SecurityModule{
+			Enabled:    true,
+			ModuleType: "totp",
+			Config:     secret,
+			CreatedAt:  time.Now(),
+		})
+	}
+	store.mu.Unlock()
+	saveStore()
+
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
+
+func pinSetupHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
+
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	store.mu.RLock()
+	session, exists := store.Sessions[cookie.Value]
+	store.mu.RUnlock()
+
+	if !exists || time.Now().After(session.ExpiresAt) {
+		http.Error(w, "Session expired", http.StatusUnauthorized)
+		return
+	}
+
+	email := session.Email
+	pinType := r.FormValue("pin_type") // "pin" or "duress"
+	pin := r.FormValue("pin")
+
+	if pin == "" {
+		http.Error(w, "PIN is required", http.StatusBadRequest)
 		return
 	}
 
 	store.mu.Lock()
-	user, exists := store.Users[fromEmail]
-	var wasAlerted bool
-	if exists {
-		wasAlerted = user.AlertSent
-		user.LastPing = time.Now()
-		user.LastReminderNum = 0
-		user.AlertSent = false
-	}
-	store.mu.Unlock()
-
+	user, exists := store.Users[email]
 	if !exists {
-		log.Printf("No user found for email: %s", fromEmail)
-		w.WriteHeader(http.StatusOK)
+		store.mu.Unlock()
+		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
+	// Add or update PIN module
+	found := false
+	for i, mod := range user.SecurityModules {
+		if mod.ModuleType == pinType {
+			user.SecurityModules[i].Config = pin
+			user.SecurityModules[i].Enabled = true
+			user.SecurityModules[i].CreatedAt = time.Now()
+			found = true
+			break
+		}
+	}
+	if !found {
+		user.SecurityModules = append(user.SecurityModules, SecurityModule{
+			Enabled:    true,
+			ModuleType: pinType,
+			Config:     pin,
+			CreatedAt:  time.Now(),
+		})
+	}
+	store.mu.Unlock()
 	saveStore()
 
-	if wasAlerted {
-		sendAllClearEmail(user)
-	}
-
-	sendReplyEmail(fromEmail, inboundEmail.MessageID, inboundEmail.Subject, inboundEmail.TextBody)
-
-	w.WriteHeader(http.StatusOK)
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
-func pingScheduler() {
-	ticker := time.NewTicker(1 * time.Minute)
+func pinVerifyHandler(w http.ResponseWriter, r *http.Request) {
+	// For PIN-based check-in without email link
+	pin := r.URL.Query().Get("pin")
+	pinType := r.URL.Query().Get("type") // "pin" or "duress"
 
-	for range ticker.C {
-		now := time.Now()
+	if pin == "" {
+		http.Error(w, "PIN required", http.StatusBadRequest)
+		return
+	}
 
-		// Clean up expired sessions
-		store.mu.Lock()
-		for token, session := range store.Sessions {
-			if time.Now().After(session.ExpiresAt) {
-				delete(store.Sessions, token)
+	store.mu.Lock()
+	var foundUser *User
+	for _, user := range store.Users {
+		for _, mod := range user.SecurityModules {
+			if mod.ModuleType == pinType && mod.Enabled && mod.Config == pin {
+				foundUser = user
+				break
 			}
-		}
-		store.mu.Unlock()
-
-		store.mu.RLock()
-		users := make([]*User, 0, len(store.Users))
-		for _, u := range store.Users {
-			users = append(users, u)
-		}
-		store.mu.RUnlock()
-
-		needsSave := false
-
-		for _, user := range users {
-			if !user.Active {
-				continue
-			}
-
-			// v2.0: Skip if user is paused (vacation/travel mode)
-			if user.PausedUntil != nil && time.Now().Before(*user.PausedUntil) {
-				continue
-			}
-			if user.PausedUntil != nil && time.Now().After(*user.PausedUntil) {
-				// Auto-resume after pause expires
-				user.PausedUntil = nil
-				log.Printf("Auto-resuming user %s after vacation pause", user.Email)
-				needsSave = true
-			}
-
-			var pingInterval time.Duration
-			var reminderInterval time.Duration
-
-			if user.PingFrequency == "daily" {
-				pingInterval = 24 * time.Hour
-				reminderInterval = 6 * time.Hour
-			} else {
-				pingInterval = 7 * 24 * time.Hour
-				reminderInterval = 24 * time.Hour
-			}
-
-			cycleComplete := user.CurrentCycleStart.IsZero() || user.LastPing.After(user.CurrentCycleStart)
-
-			if cycleComplete && now.Hour() == user.CheckInHour && now.Minute() < 5 {
-				if user.PingFrequency == "daily" {
-					lastResponseDate := user.LastPing.Truncate(24 * time.Hour)
-					todayDate := now.Truncate(24 * time.Hour)
-
-					if todayDate.After(lastResponseDate) {
-						store.mu.Lock()
-						user.CurrentCycleStart = time.Now()
-						user.LastReminderNum = 0
-						user.AlertSent = false
-						user.Token = generateToken()
-						store.mu.Unlock()
-						log.Printf("Starting new DAILY cycle for %s", user.Email)
-						sendPing(user, 0)
-						needsSave = true
-						continue
-					}
-				} else {
-					if user.CurrentCycleStart.IsZero() {
-						store.mu.Lock()
-						user.CurrentCycleStart = time.Now()
-						user.LastReminderNum = 0
-						user.AlertSent = false
-						user.Token = generateToken()
-						store.mu.Unlock()
-						log.Printf("Starting FIRST weekly cycle for %s", user.Email)
-						sendPing(user, 0)
-						needsSave = true
-						continue
-					}
-					if time.Since(user.LastPing) >= pingInterval {
-						store.mu.Lock()
-						user.CurrentCycleStart = time.Now()
-						user.LastReminderNum = 0
-						user.AlertSent = false
-						user.Token = generateToken()
-						store.mu.Unlock()
-						log.Printf("Starting new WEEKLY cycle for %s", user.Email)
-						sendPing(user, 0)
-						needsSave = true
-						continue
-					}
-				}
-			}
-
-			if !user.CurrentCycleStart.IsZero() && user.LastPing.Before(user.CurrentCycleStart) {
-				timeSinceCycleStart := time.Since(user.CurrentCycleStart)
-
-				if timeSinceCycleStart < pingInterval {
-					expectedReminderNum := int(timeSinceCycleStart / reminderInterval)
-
-					maxReminders := 3
-					if user.PingFrequency == "weekly" {
-						maxReminders = 6
-					}
-
-					if expectedReminderNum > 0 && expectedReminderNum > user.LastReminderNum && expectedReminderNum <= maxReminders {
-						store.mu.Lock()
-						user.LastReminderNum = expectedReminderNum
-						store.mu.Unlock()
-						log.Printf("Sending reminder #%d to %s", expectedReminderNum, user.Email)
-						sendPing(user, expectedReminderNum)
-						needsSave = true
-					}
-				}
-
-				if timeSinceCycleStart >= pingInterval && !user.AlertSent {
-					store.mu.Lock()
-					user.AlertSent = true
-					store.mu.Unlock()
-					log.Printf("ALERT: Sending emergency alert for %s", user.Email)
-					sendAlert(user)
-					needsSave = true
-				}
-			}
-		}
-
-		if needsSave {
-			saveStore()
 		}
 	}
+	store.mu.Unlock()
+
+	if foundUser == nil {
+		http.Error(w, "Invalid PIN", http.StatusUnauthorized)
+		return
+	}
+
+	if pinType == "duress" {
+		log.Printf("DURESS: User %s triggered duress PIN", foundUser.Email)
+		store.mu.Lock()
+		foundUser.AlertSent = true
+		store.mu.Unlock()
+		sendAlert(foundUser)
+		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+		return
+	}
+
+	// Normal PIN check-in
+	store.mu.Lock()
+	foundUser.LastPing = time.Now()
+	foundUser.LastReminderNum = 0
+	foundUser.AlertSent = false
+	store.mu.Unlock()
+
+	saveStore()
+
+	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
 }
 
 func sendPing(user *User, reminderNum int) {
@@ -743,7 +778,6 @@ func sendPing(user *User, reminderNum int) {
 
 func sendAlert(user *User) {
 	subject := fmt.Sprintf("Wellness Alert - %s Not Responding", user.Email)
-	// v2.0: Use custom message if set, otherwise default
 	body := user.AlertMessage
 	if body == "" {
 		body = fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
@@ -756,7 +790,6 @@ func sendAlert(user *User) {
 
 func sendAllClearEmail(user *User) {
 	subject := fmt.Sprintf("All Clear - %s Checked In", user.Email)
-	// v2.0: Use custom message if set, otherwise default
 	body := user.AllClearMessage
 	if body == "" {
 		body = fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
@@ -913,33 +946,6 @@ func generateToken() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-// generateTOTPSecret creates a base32-encoded secret for TOTP
-func generateTOTPSecret() string {
-	b := make([]byte, 20)
-	rand.Read(b)
-	// Use standard base32 encoding
-	return base64.StdEncoding.EncodeToString(b)
-}
-
-// verifyTOTP validates a TOTP code against a secret
-// Simple implementation: checks current 30-second window
-func verifyTOTP(secret, code string) bool {
-	if len(code) != 6 {
-		return false
-	}
-	// Decode secret
-	_, err := base64.StdEncoding.DecodeString(secret)
-	if err != nil {
-		return false
-	}
-	// Get current time window (30 seconds)
-	window := time.Now().Unix() / 30
-	// Simple HMAC-based check (simplified TOTP)
-	// In production, use github.com/pquerna/otp/totp
-	expected := fmt.Sprintf("%06d", (window%1000000))
-	return code == expected
-}
-
 func loadStore() {
 	data, err := os.ReadFile("data/users.json")
 	if err != nil {
@@ -957,7 +963,6 @@ func saveStore() {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	// User count to track growth
 	log.Printf("Saving store with %d users (DATE: %s)", len(store.Users), time.Now().Format(time.RFC3339))
 
 	data, _ := json.MarshalIndent(store, "", "  ")
@@ -968,7 +973,7 @@ func verifyTurnstile(token string) bool {
 	secret := os.Getenv("TURNSTILE_SECRET_KEY")
 	if secret == "" {
 		log.Println("TURNSTILE_SECRET_KEY not set, accepting signup (WARNING: production should use Turnstile)")
-		return true // Accept all when TURNSTILE not configured
+		return true
 	}
 	if token == "" {
 		return false
@@ -998,4 +1003,140 @@ func verifyTurnstile(token string) bool {
 		log.Printf("Turnstile verification failed: %v", result.ErrorCodes)
 	}
 	return result.Success
+}
+
+func pingScheduler() {
+	ticker := time.NewTicker(1 * time.Minute)
+
+	for range ticker.C {
+		now := time.Now()
+
+		// Clean up expired sessions
+		store.mu.Lock()
+		for token, session := range store.Sessions {
+			if time.Now().After(session.ExpiresAt) {
+				delete(store.Sessions, token)
+			}
+		}
+		store.mu.Unlock()
+
+		store.mu.RLock()
+		users := make([]*User, 0, len(store.Users))
+		for _, u := range store.Users {
+			users = append(users, u)
+		}
+		store.mu.RUnlock()
+
+		needsSave := false
+
+		for _, user := range users {
+			if !user.Active {
+				continue
+			}
+
+			// Skip if user is paused (vacation/travel mode)
+			if user.PausedUntil != nil && time.Now().Before(*user.PausedUntil) {
+				continue
+			}
+			if user.PausedUntil != nil && time.Now().After(*user.PausedUntil) {
+				// Auto-resume after pause expires
+				user.PausedUntil = nil
+				log.Printf("Auto-resuming user %s after vacation pause", user.Email)
+				needsSave = true
+			}
+
+			var pingInterval time.Duration
+			var reminderInterval time.Duration
+
+			if user.PingFrequency == "daily" {
+				pingInterval = 24 * time.Hour
+				reminderInterval = 6 * time.Hour
+			} else {
+				pingInterval = 7 * 24 * time.Hour
+				reminderInterval = 24 * time.Hour
+			}
+
+			cycleComplete := user.CurrentCycleStart.IsZero() || user.LastPing.After(user.CurrentCycleStart)
+
+			if cycleComplete && now.Hour() == user.CheckInHour && now.Minute() < 5 {
+				if user.PingFrequency == "daily" {
+					lastResponseDate := user.LastPing.Truncate(24 * time.Hour)
+					todayDate := now.Truncate(24 * time.Hour)
+
+					if todayDate.After(lastResponseDate) {
+						store.mu.Lock()
+						user.CurrentCycleStart = time.Now()
+						user.LastReminderNum = 0
+						user.AlertSent = false
+						user.Token = generateToken()
+						store.mu.Unlock()
+						log.Printf("Starting new DAILY cycle for %s", user.Email)
+						sendPing(user, 0)
+						needsSave = true
+						continue
+					}
+				} else {
+					if user.CurrentCycleStart.IsZero() {
+						store.mu.Lock()
+						user.CurrentCycleStart = time.Now()
+						user.LastReminderNum = 0
+						user.AlertSent = false
+						user.Token = generateToken()
+						store.mu.Unlock()
+						log.Printf("Starting FIRST weekly cycle for %s", user.Email)
+						sendPing(user, 0)
+						needsSave = true
+						continue
+					}
+					if time.Since(user.LastPing) >= pingInterval {
+						store.mu.Lock()
+						user.CurrentCycleStart = time.Now()
+						user.LastReminderNum = 0
+						user.AlertSent = false
+						user.Token = generateToken()
+						store.mu.Unlock()
+						log.Printf("Starting new WEEKLY cycle for %s", user.Email)
+						sendPing(user, 0)
+						needsSave = true
+						continue
+					}
+				}
+			}
+
+			if !user.CurrentCycleStart.IsZero() && user.LastPing.Before(user.CurrentCycleStart) {
+				timeSinceCycleStart := time.Since(user.CurrentCycleStart)
+
+				if timeSinceCycleStart < pingInterval {
+					expectedReminderNum := int(timeSinceCycleStart / reminderInterval)
+
+					maxReminders := 3
+					if user.PingFrequency == "weekly" {
+						maxReminders = 6
+					}
+
+					if expectedReminderNum > 0 && expectedReminderNum > user.LastReminderNum && expectedReminderNum <= maxReminders {
+						store.mu.Lock()
+						user.LastReminderNum = expectedReminderNum
+						store.mu.Unlock()
+						log.Printf("Sending reminder #%d to %s", expectedReminderNum, user.Email)
+						sendPing(user, expectedReminderNum)
+						needsSave = true
+					}
+				}
+
+				if timeSinceCycleStart >= pingInterval && !user.AlertSent {
+					store.mu.Lock()
+					user.AlertSent = true
+					store.mu.Unlock()
+					log.Printf("ALERT: Sending emergency alert for %s", user.Email)
+					sendAlert(user)
+					needsSave = true
+				}
+			}
+		}
+
+		if needsSave {
+			saveStore()
+		}
+	}
 }
