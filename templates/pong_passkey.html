@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>Verification Required</h1>
+    <p>Use your passkey to continue.</p>
+    <button id="passkey-btn" type="button" data-token="{{.Token}}" data-action="{{.Action}}">Use Passkey</button>
+    <p id="status" class="muted"></p>
+
+    <p><a href="/">Back to home</a></p>
+
+    <footer>Version: <span class="version">{{.Version}}</span></footer>
+
+    <script src="/static/version.js"></script>
+
+    <script src="/static/webauthn.js"></script>
+    <script src="/static/passkey-login.js"></script>
+</body>
+
+</html>

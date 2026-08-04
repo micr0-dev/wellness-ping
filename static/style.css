@@ -1,74 +1,400 @@
 :root {
     color-scheme: light dark;
+
+    /* Plain, neutral palette (old-school / "php" vibe). No colourful fills. */
+    --bg: light-dark(#ffffff, #101013);
+    --fg: light-dark(#16181c, #e8e8ea);
+    --muted: light-dark(#5a5e66, #9aa0aa);
+    --surface: light-dark(#f3f4f5, #1c1d20);
+    --border: light-dark(#c9ccd1, #3d4046);
+    --focus: light-dark(#0a5bd3, #6ea8ff);
+    --ok: light-dark(#1a7f37, #57cd78);
+    --danger: light-dark(#b3261e, #ff7a72);
+    --code-bg: light-dark(#f1f1f2, #17181b);
+
+    --radius: 6px;
+    --pad: 16px;
+}
+
+* {
+    box-sizing: border-box;
 }
 
 body {
-    font-family:
-        "Inter",
-        "Adwaita Sans",
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        Roboto,
-        Oxygen,
-        Ubuntu,
-        Cantarell,
-        "Open Sans",
-        "Helvetica Neue",
-        sans-serif;
-    max-width: 700px;
-    margin: 60px auto auto auto;
-    padding: 30px;
+    font-family: "Inter", "Adwaita Sans", system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell,
+        "Open Sans", "Helvetica Neue", sans-serif;
+    max-width: 680px;
+    margin: 48px auto;
+    padding: 8px 24px 56px;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.5;
 }
 
-div > * {
-    margin-top: 0;
-    margin-bottom: 20px;
+h1 {
+    font-size: 1.65rem;
+    line-height: 1.2;
+    margin: 0 0 6px;
 }
 
-div > *:last-child {
-    margin-bottom: 0px;
+h2 {
+    font-size: 1.08rem;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 0 0 24px;
 }
 
-details {
-    margin-top: 25px;
+h3 {
+    font-size: 1.12rem;
+    margin: 28px 0 12px;
 }
 
-summary {
-    font-weight: bold;
-    padding: 10px;
-    cursor: pointer;
-    background-color: light-dark(#eee, #444);
-    border: 1px solid light-dark(#444, #eee);
+h4 {
+    font-size: 1rem;
+    margin: 18px 0 10px;
 }
 
-.raised {
-    padding: 15px;
-    margin-top: 5px;
-    border-left: 3px solid light-dark(#444, #eee);
+p {
+    margin: 0 0 14px;
 }
 
-footer {
-    margin-top: 30px;
-    border-top: 1px solid light-dark(#555, #888);
-    padding-top: 16px;
-    color: light-dark(#555, #888);
-    font-size: 0.9em;
+ul {
+    margin: 4px 0 16px;
+    padding-left: 24px;
+}
+
+li {
+    margin: 3px 0;
+}
+
+a {
+    color: var(--focus);
+}
+
+code {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.92em;
+}
+
+/* Helpers ---------------------------------------------------------------- */
+
+.muted {
+    color: var(--muted);
+}
+
+.ok {
+    color: var(--ok);
+    font-weight: 600;
+}
+
+.off {
+    color: var(--muted);
+}
+
+.danger {
+    color: var(--danger);
 }
 
 .note {
-    color: light-dark(#555, #888);
-    font-size: 0.9em;
+    font-size: 0.92em;
+    color: var(--muted);
 }
 
-input,
-select,
-button {
-    font-size: 16px;
-    padding: 5px;
+/* Panels ----------------------------------------------------------------- */
+
+.raised {
+    padding: var(--pad);
+    margin: 16px 0;
+    border-left: 3px solid var(--border);
+    padding-left: 18px;
 }
 
-button {
+.raised > *:last-child {
+    margin-bottom: 0;
+}
+
+/* Accordion -------------------------------------------------------------- */
+
+details {
+    margin: 16px 0;
+    border: 1px solid var(--border);
+}
+
+summary {
+    display: block;
     cursor: pointer;
+    padding: 12px 14px;
+    font-weight: 600;
+    background: var(--surface);
+    user-select: none;
+}
+
+summary:hover {
+    background: light-dark(#eceef0, #26272b);
+}
+
+summary + .details-body {
+    border-top: 1px solid var(--border);
+}
+
+.details-body {
+    padding: 14px 16px;
+}
+
+/* Forms ------------------------------------------------------------------ */
+
+label {
+    display: block;
+    font-weight: 600;
+    margin: 6px 0 4px;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="datetime-local"],
+select,
+textarea {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 16px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin: 4px 0 16px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 72px;
+}
+
+input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    accent-color: var(--focus);
+}
+
+input[type="hidden"] {
+    display: none;
+}
+
+select {
+    background-color: var(--bg);
+}
+
+/* Small inline time field (e.g. check-in hour followed by :00) */
+.time-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 16px;
+}
+
+.time-field input[type="number"] {
+    width: auto;
+    margin: 0;
+    flex: 0 0 auto;
+}
+
+.time-suffix {
+    font-size: 16px;
+    color: var(--fg);
+}
+
+/* Row of inline actions (button + adjacent link) */
+.btn-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 4px 0 8px;
+}
+
+.btn-row button {
+    white-space: nowrap;
+}
+
+.back-link {
+    margin: 28px 0 0;
+}
+
+.confirm-note {
+    margin-top: 30px;
+}
+
+/* Spacing between stacked form widgets */
+form small {
+    display: block;
+    margin: 0 0 12px;
+}
+
+form .cf-turnstile {
+    margin: 8px 0 14px;
+}
+
+form > button {
+    margin-top: 10px;
+}
+
+.footer-privacy {
+    margin-top: 1em;
+}
+
+/* Buttons (plain, no colour fills) --------------------------------------- */
+
+button,
+.mod-btn {
+    display: inline-block;
+    padding: 12px 20px;
+    font-size: 16px;
+    line-height: 1.2;
+    cursor: pointer;
+    border-radius: 999px; /* pill shape */
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--fg);
+}
+
+button:hover,
+.mod-btn:hover {
+    background: light-dark(#eceef0, #26272b);
+}
+
+button:disabled,
+.mod-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+button.danger {
+    color: var(--danger);
+    background: transparent;
+    border: 1px solid var(--danger);
+}
+
+button.ghost,
+.mod-btn.ghost,
+a.mod-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+}
+
+a.mod-btn {
+    text-decoration: none;
+}
+
+/* Security modules ------------------------------------------------------- */
+
+.secmodule {
+    border: 1px solid var(--border);
+    padding: 12px 14px;
+    margin: 14px 0;
+}
+
+.secmodule.greyed {
+    opacity: 0.55;
+    background: var(--surface);
+}
+
+.secmodule.greyed input,
+.secmodule.greyed button,
+.secmodule.greyed a,
+.secmodule.greyed textarea {
+    pointer-events: none;
+}
+
+.mod-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    font-weight: 600;
+    margin: 0 0 4px;
+}
+
+.mod-check input[type="checkbox"] {
+    flex: none;
+}
+
+.secmod-body {
+    margin-top: 10px;
+}
+
+/* QR / manual code ------------------------------------------------------- */
+
+.qr-wrap {
+    text-align: center;
+    margin: 16px 0;
+    padding: 16px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+}
+
+.qr-img {
+    max-width: 240px;
+    height: auto;
+    padding: 8px;
+    background: #fff;
+    display: inline-block;
+}
+
+.manual-code {
+    display: block;
+    background: var(--code-bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    margin: 6px 0 16px;
+    word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Misc ------------------------------------------------------------------- */
+
+.otp-input {
+    font-size: 18px !important;
+    letter-spacing: 6px;
+    text-align: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.version {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+footer {
+    margin-top: 36px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.88em;
+    line-height: 1.6;
+}
+
+footer a {
+    color: var(--focus);
+}
+
+hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 24px 0;
 }
