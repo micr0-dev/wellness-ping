@@ -12,12 +12,12 @@
     <h1>Setup Authenticator App</h1>
     <p>Scan the QR code below with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
     
-    <div style="text-align: center; margin: 20px 0;">
-        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{.QRURL}}" alt="QR Code" style="border: 2px solid #ddd; padding: 10px;">
+    <div class="qr-wrap">
+        <img class="qr-img" src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{.QRURL}}" alt="QR Code">
     </div>
     
     <p><b>Or enter this code manually:</b></p>
-    <code style="background: #f4f4f4; padding: 10px; display: block; word-break: break-all;">{{.Secret}}</code>
+    <code class="manual-code">{{.Secret}}</code>
     
     <br>
     <form action="/totp-verify" method="POST">

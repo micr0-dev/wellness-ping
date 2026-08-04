@@ -83,11 +83,13 @@ var store = &Store{
 	Sessions:             make(map[string]*Session),
 }
 
-// CheckInFlow tracks which security modules have been authenticated for
-// an in-progress check-in, keyed by the check-in token.
+// CheckInFlow tracks which security modules have been authenticated for an
+// in-progress auth challenge, keyed by the flow token. It is used both for
+// check-ins ("/pong") and for signing into settings ("/login").
 type CheckInFlow struct {
 	Token     string
 	Email     string
+	Kind      string // "checkin" or "login"
 	Completed map[string]bool // "pin", "totp", "passkey"
 	StartedAt time.Time
 }
@@ -97,8 +99,9 @@ var checkInFlows = struct {
 	m map[string]*CheckInFlow
 }{m: map[string]*CheckInFlow{}}
 
-// moduleOrder is the order steps are shown in.
-var moduleOrder = []string{"pin", "totp", "passkey"}
+// moduleOrder is the order steps are shown in. TOTP is last because its
+// codes are time-sensitive.
+var moduleOrder = []string{"pin", "passkey", "totp"}
 
 // WebAuthn globals ----------------------------------------------------------
 
@@ -212,6 +215,7 @@ func main() {
 	http.HandleFunc("/settings", settingsHandler)
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/pong", pongHandler)
+	http.HandleFunc("/login", loginHandler)
 	http.HandleFunc("/test-ping", testPingHandler)
 	http.HandleFunc("/inbound", inboundEmailHandler)
 
@@ -306,6 +310,23 @@ func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	if pending.Code != code {
 		http.Error(w, "Invalid code", http.StatusBadRequest)
+		return
+	}
+
+	store.mu.Lock()
+	delete(store.PendingVerifications, email)
+	store.mu.Unlock()
+
+	// If the user has any security modules enabled, the email code is only the
+	// first factor - they must complete each enabled module before a settings
+	// session is granted.
+	store.mu.RLock()
+	user := store.Users[email]
+	store.mu.RUnlock()
+	if user != nil && len(enabledModules(user)) > 0 {
+		loginToken := generateToken()
+		getFlow(loginToken, email, "login")
+		http.Redirect(w, r, "/login?token="+url.QueryEscape(loginToken), http.StatusSeeOther)
 		return
 	}
 
@@ -599,7 +620,19 @@ func findUserByToken(token string) *User {
 	return nil
 }
 
-func getFlow(token string, u *User) *CheckInFlow {
+func findUserByEmail(email string) *User {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.Users[email]
+}
+
+func getFlowByToken(token string) *CheckInFlow {
+	checkInFlows.RLock()
+	defer checkInFlows.RUnlock()
+	return checkInFlows.m[token]
+}
+
+func getFlow(token, email, kind string) *CheckInFlow {
 	checkInFlows.RLock()
 	f, ok := checkInFlows.m[token]
 	checkInFlows.RUnlock()
@@ -608,7 +641,8 @@ func getFlow(token string, u *User) *CheckInFlow {
 	}
 	f = &CheckInFlow{
 		Token:     token,
-		Email:     u.Email,
+		Email:     email,
+		Kind:      kind,
 		Completed: map[string]bool{},
 		StartedAt: time.Now(),
 	}
@@ -653,17 +687,55 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	flow := getFlow(token, u.Email, "checkin")
+	actionURL := "/pong?token=" + url.QueryEscape(token)
+
 	if r.Method == "POST" {
-		handleCheckInStep(w, r, u, token)
+		handleChallengeStep(w, r, u, flow, actionURL, func() {
+			completeCheckIn(u, token)
+			fmt.Fprint(w, confirmedPage())
+		})
 		return
 	}
 
-	renderCheckInStep(w, u, token)
+	if !renderChallengeStep(w, u, flow, actionURL) {
+		completeCheckIn(u, token)
+		fmt.Fprint(w, confirmedPage())
+	}
 }
 
-func renderCheckInStep(w http.ResponseWriter, u *User, token string) {
-	flow := getFlow(token, u)
+// loginHandler gates access to /settings behind any enabled security modules.
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	flow := getFlowByToken(token)
+	if flow == nil || flow.Kind != "login" {
+		http.Error(w, "Invalid or expired login session", http.StatusBadRequest)
+		return
+	}
 
+	u := findUserByEmail(flow.Email)
+	if u == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	actionURL := "/login?token=" + url.QueryEscape(token)
+
+	if r.Method == "POST" {
+		handleChallengeStep(w, r, u, flow, actionURL, func() {
+			createSession(w, r, u.Email, token)
+		})
+		return
+	}
+
+	if !renderChallengeStep(w, u, flow, actionURL) {
+		createSession(w, r, u.Email, token)
+	}
+}
+
+// renderChallengeStep shows the next required step. Returns false if all
+// enabled modules are satisfied.
+func renderChallengeStep(w http.ResponseWriter, u *User, flow *CheckInFlow, actionURL string) bool {
 	step := ""
 	for _, m := range enabledModules(u) {
 		if !flow.Completed[m] {
@@ -671,16 +743,14 @@ func renderCheckInStep(w http.ResponseWriter, u *User, token string) {
 			break
 		}
 	}
-
 	if step == "" {
-		completeCheckIn(u, token)
-		fmt.Fprintf(w, confirmedPage())
-		return
+		return false
 	}
 
 	data := map[string]interface{}{
-		"Token":   token,
+		"Token":   flow.Token,
 		"Step":    step,
+		"Action":  actionURL,
 		"Version": VERSION,
 		"Email":   u.Email,
 	}
@@ -696,58 +766,98 @@ func renderCheckInStep(w http.ResponseWriter, u *User, token string) {
 		tmpl := template.Must(template.ParseFiles("templates/pong_passkey.html"))
 		tmpl.Execute(w, data)
 	}
+	return true
 }
 
-func handleCheckInStep(w http.ResponseWriter, r *http.Request, u *User, token string) {
+func handleChallengeStep(w http.ResponseWriter, r *http.Request, u *User, flow *CheckInFlow, actionURL string, onComplete func()) {
 	step := r.FormValue("step")
-	flow := getFlow(token, u)
 
 	if step == "pin" {
 		pin := r.FormValue("pin")
 		var cfg PINConfig
 		json.Unmarshal([]byte(moduleConfig(u, "pin")), &cfg)
+
+		// Duress PIN: never a real success - silently alert.
 		if cfg.Duress != "" && pin == cfg.Duress {
-			// Silent alert, fake success
 			log.Printf("DURESS: User %s triggered duress PIN", u.Email)
 			store.mu.Lock()
 			u.AlertSent = true
 			store.mu.Unlock()
 			sendAlert(u)
-			checkInFlows.Lock()
-			delete(checkInFlows.m, token)
-			checkInFlows.Unlock()
-			fmt.Fprintf(w, confirmedPage())
+			discardFlow(flow.Token)
+			fmt.Fprint(w, confirmedPage())
 			return
 		}
+
+		// PIN is a hard requirement when the module is enabled.
 		if cfg.Pin == "" || pin != cfg.Pin {
 			http.Error(w, "Invalid PIN", http.StatusUnauthorized)
 			return
 		}
 		flow.Completed["pin"] = true
-		http.Redirect(w, r, "/pong?token="+token, http.StatusSeeOther)
+		http.Redirect(w, r, actionURL, http.StatusSeeOther)
 		return
 	}
 
 	if step == "totp" {
 		code := r.FormValue("code")
 		var cfg TOTPConfig
-		if json.Unmarshal([]byte(moduleConfig(u, "totp")), &cfg) != nil || !totp.Validate(code, cfg.Secret) {
+		if json.Unmarshal([]byte(moduleConfig(u, "totp")), &cfg) != nil || cfg.Secret == "" || !totp.Validate(code, cfg.Secret) {
 			http.Error(w, "Invalid code. Please try again.", http.StatusUnauthorized)
 			return
 		}
 		flow.Completed["totp"] = true
-		http.Redirect(w, r, "/pong?token="+token, http.StatusSeeOther)
+		http.Redirect(w, r, actionURL, http.StatusSeeOther)
 		return
 	}
 
 	http.Error(w, "Unknown step", http.StatusBadRequest)
 }
 
-// Passkey login ceremony ----------------------------------------------------
+func discardFlow(token string) {
+	checkInFlows.Lock()
+	delete(checkInFlows.m, token)
+	checkInFlows.Unlock()
+}
+
+// createSession grants a settings session cookie. All enabled security
+// modules must already have been satisfied before calling this.
+func createSession(w http.ResponseWriter, r *http.Request, email, flowToken string) {
+	discardFlow(flowToken)
+
+	sessionToken := generateToken()
+	store.mu.Lock()
+	store.Sessions[sessionToken] = &Session{
+		Email:     email,
+		Token:     sessionToken,
+		ExpiresAt: time.Now().Add(30 * time.Minute),
+	}
+	store.mu.Unlock()
+	saveStore()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    sessionToken,
+		Path:     "/",
+		MaxAge:   1800,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
+
+// flowUser resolves the user for a passkey ceremony from its flow token.
+func flowUser(token string) *User {
+	flow := getFlowByToken(token)
+	if flow == nil {
+		return nil
+	}
+	return findUserByEmail(flow.Email)
+}
 
 func passkeyLoginBegin(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
-	u := findUserByToken(token)
+	u := flowUser(token)
 	if u == nil {
 		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
@@ -777,7 +887,7 @@ func passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	u := findUserByToken(token)
+	u := flowUser(token)
 	if u == nil {
 		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
@@ -802,11 +912,11 @@ func passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	delete(waSessions.m, "login:"+token)
 	waSessions.Unlock()
 
-	flow := getFlow(token, u)
+	flow := getFlowByToken(token)
 	flow.Completed["passkey"] = true
-	http.Redirect(w, r, "/pong?token="+token, http.StatusSeeOther)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "token": flow.Token})
 }
-
 // ---------------------------------------------------------------------------
 // Security module handlers
 // ---------------------------------------------------------------------------

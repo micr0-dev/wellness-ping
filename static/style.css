@@ -109,3 +109,32 @@ button {
 .mod-btn {
     padding: 6px 12px;
 }
+
+.qr-wrap {
+    text-align: center;
+    margin: 20px 0;
+    padding: 12px;
+    background: #fff;
+    border: 2px solid light-dark(#444, #eee);
+    display: inline-block;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.qr-img {
+    max-width: 220px;
+    height: auto;
+    padding: 12px;
+    background: #fff;
+    display: inline-block;
+}
+
+.manual-code {
+    display: block;
+    background: light-dark(#f4f4f4, #1e1e1e);
+    color: light-dark(#111, #eee);
+    border: 1px solid light-dark(#ccc, #555);
+    padding: 12px;
+    word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

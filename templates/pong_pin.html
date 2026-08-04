@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Confirm Check-in - Wellness Ping</title>
+    <title>Confirm - Wellness Ping</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <h1>Check-in Confirmation</h1>
-    <p>Enter your PIN to confirm you're okay.</p>
-    <form action="/pong?token={{.Token}}" method="POST">
+    <h1>Verification Required</h1>
+    <p>Enter your PIN to continue.</p>
+    <form action="{{.Action}}" method="POST">
         <input type="hidden" name="step" value="pin">
         <label>PIN:</label><br>
         <input type="password" name="pin" autocomplete="one-time-code" required autofocus><br><br>
-        <button type="submit">Confirm</button>
+        <button type="submit">Continue</button>
     </form>
     <br>
     <a href="/">Back to home</a>
