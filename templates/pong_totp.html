@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm Check-in - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Check-in Confirmation</h1>
+    <p>Enter the 6-digit code from your authenticator app.</p>
+    <form action="/pong?token={{.Token}}" method="POST">
+        <input type="hidden" name="step" value="totp">
+        <label>Code:</label><br>
+        <input type="text" name="code" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required autofocus><br><br>
+        <button type="submit">Confirm</button>
+    </form>
+    <br>
+    <a href="/">Back to home</a>
+    <hr>
+    <footer>Version: {{.Version}}</footer>
+</body>
+</html>

@@ -22,18 +22,18 @@
     </div>
     {{end}}
 
-    {{if .User}}
-    <h3>Current Settings</h3>
-    <p><b>Email:</b> {{.User.Email}}</p>
-    <p><b>Alert Emails:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
-    <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
-    <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
-    {{if .User.PausedUntil}}<p><b>Vacation Pause:</b> Active until {{.User.PausedUntil}}</p>{{end}}
-    <br>
-    {{end}}
-
     <form action="/update" method="POST">
         <input type="hidden" name="email" value="{{.Email}}">
+
+        {{if .User}}
+        <h3>Current Settings</h3>
+        <p><b>Email:</b> {{.User.Email}}</p>
+        <p><b>Alert Emails:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
+        <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
+        <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
+        {{if .User.PausedUntil}}<p><b>Vacation Pause:</b> Active until {{.User.PausedUntil}}</p>{{end}}
+        <br>
+        {{end}}
 
         <label>Alert Email List (comma-separated):</label><br>
         <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
@@ -70,6 +70,62 @@
         <label>Preferred Check-in Time (your local time):</label><br>
         <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br><br>
 
+        <h3>Extra Security</h3>
+        <p style="color: #666;">Enable security modules to add extra verification before a check-in is accepted. Each enabled module must be completed before your check-in registers. Module sections are greyed out until you check the box to enable them.</p>
+
+        <!-- PIN + Duress module -->
+        <div class="secmodule greyed">
+            <label class="mod-check">
+                <input type="checkbox" name="pin_enable" value="1" id="pin_enable" onchange="toggleModule('pin')" {{if .PinEnabled}}checked{{end}}>
+                <b>Check-in PIN &amp; Duress PIN</b>
+            </label>
+            <div class="secmod-body" id="pin-body">
+                <p style="color: #666;">Requires a PIN to complete check-in. The Duress PIN silently alerts your contacts instead of confirming.</p>
+                <label>Check-in PIN:</label><br>
+                <input type="password" name="pin_pin" value="{{.PinPin}}" {{if not .PinEnabled}}disabled{{end}}><br><br>
+                <label>Duress PIN (optional):</label><br>
+                <input type="password" name="pin_duress" value="{{.PinDuress}}" {{if not .PinEnabled}}disabled{{end}}><br>
+                {{if .PinEnabled}}<small style="color: #666;">Enabled. Save settings to update, or uncheck to disable.</small>{{end}}
+            </div>
+        </div>
+
+        <!-- TOTP module -->
+        <div class="secmodule greyed">
+            <label class="mod-check">
+                <input type="checkbox" id="totp_enable" onchange="toggleModule('totp')" {{if .TOTPEnabled}}checked{{end}}>
+                <b>Authenticator App (2FA)</b>
+            </label>
+            <div class="secmod-body" id="totp-body">
+                <p style="color: #666;">Requires a 6-digit code from your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
+                {{if .TOTPEnabled}}
+                <p><span style="color: green;">Enabled</span></p>
+                <a href="/totp-setup">Reconfigure</a> |
+                <form action="/totp-disable" method="POST" style="display: inline;"><button type="submit">Disable</button></form>
+                {{else}}
+                <a class="mod-btn" href="/totp-setup" {{if not .TOTPEnabled}}tabindex="-1"{{end}}>Set up Authenticator App</a>
+                {{end}}
+            </div>
+        </div>
+
+        <!-- Passkey module -->
+        <div class="secmodule greyed">
+            <label class="mod-check">
+                <input type="checkbox" id="passkey_enable" onchange="toggleModule('passkey')" {{if .PasskeyEnabled}}checked{{end}}>
+                <b>Passkey</b>
+            </label>
+            <div class="secmod-body" id="passkey-body">
+                <p style="color: #666;">Requires a passkey (platform authenticator, security key, or phone).</p>
+                {{if .PasskeyEnabled}}
+                <p><span style="color: green;">Enabled</span></p>
+                <button class="mod-btn" onclick="registerPasskey(); return false;">Re-register Passkey</button> |
+                <form action="/passkey-disable" method="POST" style="display: inline;"><button type="submit">Disable</button></form>
+                {{else}}
+                <button class="mod-btn" onclick="registerPasskey(); return false;">Register Passkey</button>
+                {{end}}
+            </div>
+        </div>
+        <span id="passkey-status" style="color: #666;"></span>
+
         <details>
             <summary><b>Vacation / Travel Mode</b></summary>
             <br>
@@ -82,12 +138,9 @@
             <summary><b>Custom Alert Messages</b></summary>
             <br>
             <label>Custom Alert Message (what contacts receive when you don't check in):</label><br>
-            <textarea name="alert_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AlertMessage}}{{end}}</textarea><br>
-            <small style="color: #666;">Your custom message will be sent to emergency contacts if you miss check-ins.</small><br><br>
-
+            <textarea name="alert_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AlertMessage}}{{end}}</textarea><br><br>
             <label>Custom All-Clear Message:</label><br>
             <textarea name="all_clear_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AllClearMessage}}{{end}}</textarea><br>
-            <small style="color: #666;">Sent to contacts when you check in after an alert was sent.</small>
         </details><br>
 
         <button type="submit" name="action" value="save">Save Settings</button><br><br>
@@ -102,86 +155,9 @@
     <form action="/test-ping" method="POST">
         <button type="submit">Send Test Ping Now</button>
     </form>
-    
-    <details>
-        <summary><b>Extra Security</b></summary>
-        <br>
-        <p>Enable additional security modules. When enabled, you must authenticate with each module to check in.</p>
-        <br>
-
-        {{if .User.SecurityModules}}
-        <table style="width: 100%; border-collapse: collapse;">
-            <tr style="border-bottom: 1px solid #ddd;">
-                <th style="text-align: left; padding: 10px;">Module</th>
-                <th style="text-align: left; padding: 10px;">Status</th>
-                <th style="text-align: left; padding: 10px;">Actions</th>
-            </tr>
-
-            {{range .User.SecurityModules}}
-            <tr style="border-bottom: 1px solid #eee;">
-                <td style="padding: 10px;">
-                    {{if eq .ModuleType "pin"}}
-                    <b>Check-in PIN</b><br>
-                    <small style="color: #666;">Enter a PIN to check in directly</small>
-                    {{else if eq .ModuleType "duress"}}
-                    <b>Duress PIN</b><br>
-                    <small style="color: #666;">Silently alerts contacts when used</small>
-                    {{else if eq .ModuleType "totp"}}
-                    <b>Authenticator App (2FA)</b><br>
-                    <small style="color: #666;">Requires code from your authenticator app</small>
-                    {{else if eq .ModuleType "passkey"}}
-                    <b>Passkey</b><br>
-                    <small style="color: #666;">WebAuthn authentication</small>
-                    {{end}}
-                </td>
-                <td style="padding: 10px;">
-                    {{if .Enabled}}
-                    <span style="color: green;">Enabled</span>
-                    {{else}}
-                    <span style="color: #666;">Disabled</span>
-                    {{end}}
-                </td>
-                <td style="padding: 10px;">
-                    {{if eq .ModuleType "totp"}}
-                    <a href="/totp-setup">Reconfigure</a>
-                    {{else}}
-                    <form action="/pin-setup" method="POST" style="display: inline;">
-                        <input type="hidden" name="pin_type" value="{{.ModuleType}}">
-                        <button type="submit">Reconfigure</button>
-                    </form>
-                    {{end}}
-                </td>
-            </tr>
-            {{end}}
-        </table>
-        <br>
-        {{end}}
-
-        <h4>Add Security Module</h4>
-        <form action="/pin-setup" method="POST" style="display: inline;">
-            <input type="hidden" name="pin_type" value="pin">
-            <input type="password" name="pin" placeholder="Set a check-in PIN" required>
-            <button type="submit">Add Check-in PIN</button>
-        </form>
-        <br><br>
-
-        <form action="/pin-setup" method="POST" style="display: inline;">
-            <input type="hidden" name="pin_type" value="duress">
-            <input type="password" name="pin" placeholder="Set a duress PIN" required>
-            <button type="submit">Add Duress PIN</button>
-        </form>
-        <br><br>
-
-        <form action="/totp-setup" method="GET" style="display: inline;">
-            <button type="submit">Add Authenticator App (2FA)</button>
-        </form>
-        <br><br>
-
-        <span style="color: #999;">Passkey (coming soon)</span>
-    </details>
     {{end}}
 
-    <br><br>
+    <br>
     <a href="/">Back to home</a>
 
     <hr>
@@ -193,5 +169,65 @@
         Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
         Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
     </footer>
+
+    <script>
+        function toggleModule(name) {
+            const box = document.getElementById(name + '_enable');
+            const body = document.getElementById(name + '-body');
+            const section = body.closest('.secmodule');
+            const enabled = box.checked;
+            if (enabled) {
+                section.classList.remove('greyed');
+            } else {
+                section.classList.add('greyed');
+            }
+            // toggle disabled state on inputs/links/buttons in the body
+            const controls = body.querySelectorAll('input, button, a, textarea');
+            controls.forEach(el => {
+                if (enabled) {
+                    el.removeAttribute('disabled');
+                    el.removeAttribute('tabindex');
+                } else {
+                    el.setAttribute('disabled', 'disabled');
+                    el.setAttribute('tabindex', '-1');
+                }
+            });
+            // For non-pin modules, the enable is done via ceremony, so unchecking here is just UI.
+            // Actual enabling happens through the setup flow.
+        }
+
+        async function registerPasskey() {
+            const status = document.getElementById('passkey-status');
+            status.textContent = 'Contacting server...';
+            try {
+                const optsResp = await fetch('/passkey-register-begin');
+                if (!optsResp.ok) { status.textContent = 'Failed to begin registration'; return; }
+                const options = await optsResp.json();
+                const cred = await navigator.credentials.create({ publicKey: options });
+                const resp = await fetch('/passkey-register-finish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cred)
+                });
+                if (resp.ok) {
+                    status.textContent = 'Passkey registered!';
+                    setTimeout(() => location.reload(), 800);
+                } else {
+                    const t = await resp.text();
+                    status.textContent = t;
+                }
+            } catch (e) {
+                status.textContent = 'Passkey failed: ' + e.message;
+            }
+        }
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            // keep modules enabled per server state
+            if (document.getElementById('pin_enable').checked) toggleModule('pin');
+            if (document.getElementById('totp_enable').checked) toggleModule('totp');
+            if (document.getElementById('passkey_enable').checked) toggleModule('passkey');
+        });
+    </script>
 </body>
 </html>

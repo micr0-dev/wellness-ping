@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm Check-in - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Check-in Confirmation</h1>
+    <p>Use your passkey to confirm you're okay.</p>
+    <button id="passkey-btn">Use Passkey</button>
+    <p id="status" style="color: #666;"></p>
+    <br>
+    <a href="/">Back to home</a>
+    <hr>
+    <footer>Version: {{.Version}}</footer>
+
+    <script>
+        const token = {{.Token | printf "%q"}};
+
+        async function startPasskey() {
+            const status = document.getElementById('status');
+            status.textContent = 'Contacting server...';
+            try {
+                const optsResp = await fetch('/passkey-login-begin?token=' + encodeURIComponent(token));
+                if (!optsResp.ok) throw new Error('Failed to begin login');
+                const options = await optsResp.json();
+
+                const cred = await navigator.credentials.get({ publicKey: options });
+
+                const resp = await fetch('/passkey-login-finish?token=' + encodeURIComponent(token), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cred)
+                });
+                if (resp.ok) {
+                    window.location.href = '/pong?token=' + encodeURIComponent(token);
+                } else {
+                    const text = await resp.text();
+                    status.textContent = text;
+                }
+            } catch (e) {
+                status.textContent = 'Passkey failed: ' + e.message;
+            }
+        }
+
+        document.getElementById('passkey-btn').addEventListener('click', startPasskey);
+    </script>
+</body>
+</html>

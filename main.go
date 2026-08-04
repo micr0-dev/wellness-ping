@@ -17,34 +17,45 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pquerna/otp/totp"
 )
 
 const VERSION = "2.0.0"
 
-// SecurityModule represents an enabled security requirement
+// SecurityModule represents an enabled security requirement.
 type SecurityModule struct {
 	Enabled    bool      `json:"enabled"`
-	ModuleType string    `json:"module_type"` // "pin", "duress", "totp", "passkey"
-	Config     string    `json:"config,omitempty"` // Module-specific config (hashed PIN, TOTP secret, etc.)
+	ModuleType string    `json:"module_type"` // "pin", "totp", "passkey"
+	Config     string    `json:"config,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// Module config payloads (stored as JSON in SecurityModule.Config)
+type PINConfig struct {
+	Pin    string `json:"pin"`
+	Duress string `json:"duress"`
+}
+
+type TOTPConfig struct {
+	Secret string `json:"secret"`
+}
+
 type User struct {
-	Email           string           `json:"email"`
-	AlertEmails     []string         `json:"alert_emails"`
-	PingFrequency   string           `json:"ping_frequency"`
-	CheckInHour     int              `json:"checkin_hour"`
-	LastPing        time.Time        `json:"last_ping"`
-	CurrentCycleStart time.Time      `json:"current_cycle_start"`
-	LastReminderNum int              `json:"last_reminder_num"`
-	Active          bool             `json:"active"`
-	Token           string           `json:"token"`
-	AlertSent       bool             `json:"alert_sent"`
-	PausedUntil     *time.Time       `json:"paused_until,omitempty"`
-	AlertMessage    string           `json:"alert_message,omitempty"`
-	AllClearMessage string           `json:"all_clear_message,omitempty"`
-	SecurityModules []SecurityModule `json:"security_modules"`
+	Email             string           `json:"email"`
+	AlertEmails       []string         `json:"alert_emails"`
+	PingFrequency     string           `json:"ping_frequency"`
+	CheckInHour       int              `json:"checkin_hour"`
+	LastPing          time.Time        `json:"last_ping"`
+	CurrentCycleStart time.Time        `json:"current_cycle_start"`
+	LastReminderNum   int              `json:"last_reminder_num"`
+	Active            bool             `json:"active"`
+	Token             string           `json:"token"`
+	AlertSent         bool             `json:"alert_sent"`
+	PausedUntil       *time.Time       `json:"paused_until,omitempty"`
+	AlertMessage      string           `json:"alert_message,omitempty"`
+	AllClearMessage   string           `json:"all_clear_message,omitempty"`
+	SecurityModules   []SecurityModule `json:"security_modules"`
 }
 
 type PendingVerification struct {
@@ -72,6 +83,114 @@ var store = &Store{
 	Sessions:             make(map[string]*Session),
 }
 
+// CheckInFlow tracks which security modules have been authenticated for
+// an in-progress check-in, keyed by the check-in token.
+type CheckInFlow struct {
+	Token     string
+	Email     string
+	Completed map[string]bool // "pin", "totp", "passkey"
+	StartedAt time.Time
+}
+
+var checkInFlows = struct {
+	sync.RWMutex
+	m map[string]*CheckInFlow
+}{m: map[string]*CheckInFlow{}}
+
+// moduleOrder is the order steps are shown in.
+var moduleOrder = []string{"pin", "totp", "passkey"}
+
+// WebAuthn globals ----------------------------------------------------------
+
+var webAuthn *webauthn.WebAuthn
+
+// waSessions stores WebAuthn ceremony session data: registration & login.
+// Keyed by user email for registration, and by token for login flow.
+var waSessions = struct {
+	sync.RWMutex
+	m map[string]*webauthn.SessionData
+}{m: map[string]*webauthn.SessionData{}}
+
+// WAUser adapts our User to the webauthn.User interface.
+type WAUser struct {
+	ID          []byte
+	Name        string
+	DisplayName string
+	Credentials []webauthn.Credential
+}
+
+func (u *WAUser) WebAuthnID() []byte                        { return u.ID }
+func (u *WAUser) WebAuthnName() string                      { return u.Name }
+func (u *WAUser) WebAuthnDisplayName() string               { return u.DisplayName }
+func (u *WAUser) WebAuthnCredentials() []webauthn.Credential { return u.Credentials }
+
+func initWebAuthn() {
+	rpID := os.Getenv("WEBAUTHN_RPID")
+	if rpID == "" {
+		rpID = "wellness-p.ing"
+	}
+	origin := os.Getenv("WEBAUTHN_ORIGIN")
+	if origin == "" {
+		origin = "https://wellness-p.ing"
+	}
+
+	cfg := &webauthn.Config{
+		RPDisplayName: "Wellness Ping",
+		RPID:          rpID,
+		RPOrigins:     []string{origin, "http://localhost:8080", "http://localhost:8087"},
+	}
+	var err error
+	webAuthn, err = webauthn.New(cfg)
+	if err != nil {
+		log.Printf("Failed to init webauthn: %v", err)
+	}
+}
+
+// PasskeyConfig is the JSON stored in the passkey SecurityModule config.
+type PasskeyConfig struct {
+	Credential string `json:"credential"` // URL-safe base64 of marshalled webauthn.Credential
+}
+
+func marshalCredential(c *webauthn.Credential) (string, error) {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+func unmarshalCredential(encoded string) (*webauthn.Credential, error) {
+	b, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	var c webauthn.Credential
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// wauserFor builds a WAUser for a given user
+func wauserFor(u *User) *WAUser {
+	wu := &WAUser{
+		ID:          []byte(u.Email),
+		Name:        u.Email,
+		DisplayName: u.Email,
+	}
+	for _, mod := range u.SecurityModules {
+		if mod.ModuleType == "passkey" && mod.Enabled && mod.Config != "" {
+			var pc PasskeyConfig
+			if json.Unmarshal([]byte(mod.Config), &pc) == nil && pc.Credential != "" {
+				if c, err := unmarshalCredential(pc.Credential); err == nil {
+					wu.Credentials = append(wu.Credentials, *c)
+				}
+			}
+		}
+	}
+	return wu
+}
+
 func main() {
 	port := flag.Int("port", 8080, "Port to listen on")
 	flag.Parse()
@@ -85,6 +204,7 @@ func main() {
 	}
 
 	loadStore()
+	initWebAuthn()
 
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/send-code", sendCodeHandler)
@@ -92,12 +212,22 @@ func main() {
 	http.HandleFunc("/settings", settingsHandler)
 	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/pong", pongHandler)
-	http.HandleFunc("/inbound", inboundEmailHandler)
 	http.HandleFunc("/test-ping", testPingHandler)
+	http.HandleFunc("/inbound", inboundEmailHandler)
+
+	// Security module setup
 	http.HandleFunc("/totp-setup", totpSetupHandler)
 	http.HandleFunc("/totp-verify", totpVerifyHandler)
-	http.HandleFunc("/pin-setup", pinSetupHandler)
-	http.HandleFunc("/pin-verify", pinVerifyHandler)
+	http.HandleFunc("/totp-disable", totpDisableHandler)
+	http.HandleFunc("/pin-disable", pinDisableHandler)
+	http.HandleFunc("/passkey-register-begin", passkeyRegisterBegin)
+	http.HandleFunc("/passkey-register-finish", passkeyRegisterFinish)
+	http.HandleFunc("/passkey-disable", passkeyDisableHandler)
+
+	// Passkey check-in ceremony
+	http.HandleFunc("/passkey-login-begin", passkeyLoginBegin)
+	http.HandleFunc("/passkey-login-finish", passkeyLoginFinish)
+
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	go pingScheduler()
@@ -225,9 +355,14 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	store.mu.RUnlock()
 
 	data := map[string]interface{}{
-		"User":    user,
-		"Email":   email,
-		"Version": VERSION,
+		"User":           user,
+		"Email":          email,
+		"Version":        VERSION,
+		"PinEnabled":     moduleEnabled(user, "pin"),
+		"TOTPEnabled":    moduleEnabled(user, "totp"),
+		"PasskeyEnabled": moduleEnabled(user, "passkey"),
+		"PinPin":         modulePINConfig(user, "pin"),
+		"PinDuress":      modulePINConfig(user, "duress"),
 	}
 
 	tmpl := template.Must(template.ParseFiles("templates/settings.html"))
@@ -341,8 +476,6 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	utcTime := localTime.UTC()
 	checkInHourUTC := utcTime.Hour()
 
-	token := generateToken()
-
 	// Parse custom messages
 	alertMessage := strings.TrimSpace(r.FormValue("alert_message"))
 	allClearMessage := strings.TrimSpace(r.FormValue("all_clear_message"))
@@ -358,15 +491,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Preserve existing security modules
 	store.mu.RLock()
 	existingUser := store.Users[email]
 	store.mu.RUnlock()
-	
-	var securityModules []SecurityModule
-	if existingUser != nil {
-		securityModules = existingUser.SecurityModules
-	}
 
 	user := &User{
 		Email:             email,
@@ -377,12 +504,29 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		CurrentCycleStart: time.Time{},
 		LastReminderNum:   0,
 		Active:            true,
-		Token:             token,
+		Token:             generateToken(),
 		AlertSent:         false,
 		AlertMessage:      alertMessage,
 		AllClearMessage:   allClearMessage,
 		PausedUntil:       pausedUntil,
-		SecurityModules:   securityModules,
+	}
+	if existingUser != nil {
+		user.SecurityModules = existingUser.SecurityModules
+	}
+
+	// PIN module: read from the settings form (checkbox + fields)
+	pinEnabled := r.FormValue("pin_enable") == "1"
+	pinVal := strings.TrimSpace(r.FormValue("pin_pin"))
+	duressVal := strings.TrimSpace(r.FormValue("pin_duress"))
+	if pinEnabled {
+		cfg, _ := json.Marshal(PINConfig{Pin: pinVal, Duress: duressVal})
+		store.mu.Lock()
+		setModuleEnabled(user, "pin", string(cfg), true)
+		store.mu.Unlock()
+	} else {
+		store.mu.Lock()
+		setModuleEnabled(user, "pin", "", false)
+		store.mu.Unlock()
 	}
 
 	store.mu.Lock()
@@ -430,130 +574,327 @@ func testPingHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Test Ping Sent!</h1><p>Check your email at %s</p><p><a href='/settings'>Back to settings</a></p></body></html>", user.Email)
 }
 
+// ---------------------------------------------------------------------------
+// Check-in flow (progressive security authentication)
+// ---------------------------------------------------------------------------
+
+func enabledModules(u *User) []string {
+	var out []string
+	for _, m := range moduleOrder {
+		if moduleEnabled(u, m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func findUserByToken(token string) *User {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	for _, u := range store.Users {
+		if u.Token == token {
+			return u
+		}
+	}
+	return nil
+}
+
+func getFlow(token string, u *User) *CheckInFlow {
+	checkInFlows.RLock()
+	f, ok := checkInFlows.m[token]
+	checkInFlows.RUnlock()
+	if ok {
+		return f
+	}
+	f = &CheckInFlow{
+		Token:     token,
+		Email:     u.Email,
+		Completed: map[string]bool{},
+		StartedAt: time.Now(),
+	}
+	checkInFlows.Lock()
+	checkInFlows.m[token] = f
+	checkInFlows.Unlock()
+	return f
+}
+
+func completeCheckIn(u *User, token string) {
+	store.mu.Lock()
+	u.LastPing = time.Now()
+	u.LastReminderNum = 0
+	wasAlerted := u.AlertSent
+	u.AlertSent = false
+	store.mu.Unlock()
+
+	saveStore()
+
+	checkInFlows.Lock()
+	delete(checkInFlows.m, token)
+	checkInFlows.Unlock()
+
+	if wasAlerted {
+		sendAllClearEmail(u)
+	}
+}
+
+func confirmedPage() string {
+	return "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>"
+}
+
 func pongHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 
 	token := r.URL.Query().Get("token")
-
-	store.mu.Lock()
-	var foundUser *User
-	var wasAlerted bool
-
-	for _, user := range store.Users {
-		if user.Token == token {
-			foundUser = user
-			wasAlerted = user.AlertSent
-			break
-		}
-	}
-	store.mu.Unlock()
-
-	if foundUser == nil {
+	u := findUserByToken(token)
+	if u == nil {
 		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
 	}
 
-	// Check each enabled security module
-	for _, module := range foundUser.SecurityModules {
-		if !module.Enabled {
-			continue
-		}
-
-		switch module.ModuleType {
-		case "duress":
-			// Duress PIN is handled via separate query param
-			duressPin := r.URL.Query().Get("duress")
-			if duressPin != "" && duressPin == module.Config {
-				// Duress triggered - silent alert
-				log.Printf("DURESS: User %s triggered duress PIN", foundUser.Email)
-				store.mu.Lock()
-				foundUser.AlertSent = true
-				store.mu.Unlock()
-				sendAlert(foundUser)
-				fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
-				return
-			}
-		case "pin":
-			// Regular PIN check-in
-			pin := r.URL.Query().Get("pin")
-			if pin != "" && pin == module.Config {
-				// PIN verified, continue to next module
-				continue
-			}
-			http.Error(w, "PIN required for check-in", http.StatusUnauthorized)
-			return
-		case "totp":
-			// TOTP 2FA
-			totpCode := r.URL.Query().Get("totp")
-			if totpCode == "" {
-				http.Error(w, "TOTP code required. Check your authenticator app.", http.StatusUnauthorized)
-				return
-			}
-			if !totp.Validate(totpCode, module.Config) {
-				http.Error(w, "Invalid TOTP code", http.StatusUnauthorized)
-				return
-			}
-		case "passkey":
-			// Passkey verification (stub for now)
-			passkeyChallenge := r.URL.Query().Get("passkey")
-			if passkeyChallenge == "" {
-				http.Error(w, "Passkey authentication required", http.StatusUnauthorized)
-				return
-			}
-			// TODO: Implement proper WebAuthn verification
-			if passkeyChallenge != module.Config {
-				http.Error(w, "Invalid passkey", http.StatusUnauthorized)
-				return
-			}
-		}
+	if r.Method == "POST" {
+		handleCheckInStep(w, r, u, token)
+		return
 	}
 
-	// All security modules passed - complete check-in
-	store.mu.Lock()
-	foundUser.LastPing = time.Now()
-	foundUser.LastReminderNum = 0
-	foundUser.AlertSent = false
-	store.mu.Unlock()
-
-	saveStore()
-
-	if wasAlerted {
-		sendAllClearEmail(foundUser)
-	}
-
-	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+	renderCheckInStep(w, u, token)
 }
 
-func totpSetupHandler(w http.ResponseWriter, r *http.Request) {
+func renderCheckInStep(w http.ResponseWriter, u *User, token string) {
+	flow := getFlow(token, u)
+
+	step := ""
+	for _, m := range enabledModules(u) {
+		if !flow.Completed[m] {
+			step = m
+			break
+		}
+	}
+
+	if step == "" {
+		completeCheckIn(u, token)
+		fmt.Fprintf(w, confirmedPage())
+		return
+	}
+
+	data := map[string]interface{}{
+		"Token":   token,
+		"Step":    step,
+		"Version": VERSION,
+		"Email":   u.Email,
+	}
+
+	switch step {
+	case "pin":
+		tmpl := template.Must(template.ParseFiles("templates/pong_pin.html"))
+		tmpl.Execute(w, data)
+	case "totp":
+		tmpl := template.Must(template.ParseFiles("templates/pong_totp.html"))
+		tmpl.Execute(w, data)
+	case "passkey":
+		tmpl := template.Must(template.ParseFiles("templates/pong_passkey.html"))
+		tmpl.Execute(w, data)
+	}
+}
+
+func handleCheckInStep(w http.ResponseWriter, r *http.Request, u *User, token string) {
+	step := r.FormValue("step")
+	flow := getFlow(token, u)
+
+	if step == "pin" {
+		pin := r.FormValue("pin")
+		var cfg PINConfig
+		json.Unmarshal([]byte(moduleConfig(u, "pin")), &cfg)
+		if cfg.Duress != "" && pin == cfg.Duress {
+			// Silent alert, fake success
+			log.Printf("DURESS: User %s triggered duress PIN", u.Email)
+			store.mu.Lock()
+			u.AlertSent = true
+			store.mu.Unlock()
+			sendAlert(u)
+			checkInFlows.Lock()
+			delete(checkInFlows.m, token)
+			checkInFlows.Unlock()
+			fmt.Fprintf(w, confirmedPage())
+			return
+		}
+		if cfg.Pin == "" || pin != cfg.Pin {
+			http.Error(w, "Invalid PIN", http.StatusUnauthorized)
+			return
+		}
+		flow.Completed["pin"] = true
+		http.Redirect(w, r, "/pong?token="+token, http.StatusSeeOther)
+		return
+	}
+
+	if step == "totp" {
+		code := r.FormValue("code")
+		var cfg TOTPConfig
+		if json.Unmarshal([]byte(moduleConfig(u, "totp")), &cfg) != nil || !totp.Validate(code, cfg.Secret) {
+			http.Error(w, "Invalid code. Please try again.", http.StatusUnauthorized)
+			return
+		}
+		flow.Completed["totp"] = true
+		http.Redirect(w, r, "/pong?token="+token, http.StatusSeeOther)
+		return
+	}
+
+	http.Error(w, "Unknown step", http.StatusBadRequest)
+}
+
+// Passkey login ceremony ----------------------------------------------------
+
+func passkeyLoginBegin(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	u := findUserByToken(token)
+	if u == nil {
+		http.Error(w, "Invalid token", http.StatusBadRequest)
+		return
+	}
+	wu := wauserFor(u)
+	if len(wu.Credentials) == 0 {
+		http.Error(w, "No passkey registered", http.StatusBadRequest)
+		return
+	}
+
+	options, sessionData, err := webAuthn.BeginLogin(wu)
+	if err != nil {
+		http.Error(w, "Failed to begin passkey login", http.StatusInternalServerError)
+		return
+	}
+	waSessions.Lock()
+	waSessions.m["login:"+token] = sessionData
+	waSessions.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(options)
+}
+
+func passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u := findUserByToken(token)
+	if u == nil {
+		http.Error(w, "Invalid token", http.StatusBadRequest)
+		return
+	}
+
+	waSessions.RLock()
+	sessionData, ok := waSessions.m["login:"+token]
+	waSessions.RUnlock()
+	if !ok {
+		http.Error(w, "No passkey session", http.StatusBadRequest)
+		return
+	}
+
+	wu := wauserFor(u)
+	_, err := webAuthn.FinishLogin(wu, *sessionData, r)
+	if err != nil {
+		http.Error(w, "Passkey verification failed", http.StatusUnauthorized)
+		return
+	}
+
+	waSessions.Lock()
+	delete(waSessions.m, "login:"+token)
+	waSessions.Unlock()
+
+	flow := getFlow(token, u)
+	flow.Completed["passkey"] = true
+	http.Redirect(w, r, "/pong?token="+token, http.StatusSeeOther)
+}
+
+// ---------------------------------------------------------------------------
+// Security module handlers
+// ---------------------------------------------------------------------------
+
+func moduleEnabled(u *User, moduleType string) bool {
+	for _, mod := range u.SecurityModules {
+		if mod.ModuleType == moduleType && mod.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func moduleConfig(u *User, moduleType string) string {
+	for _, mod := range u.SecurityModules {
+		if mod.ModuleType == moduleType && mod.Enabled {
+			return mod.Config
+		}
+	}
+	return ""
+}
+
+func modulePINConfig(u *User, field string) string {
+	if u == nil {
+		return ""
+	}
+	var cfg PINConfig
+	json.Unmarshal([]byte(moduleConfig(u, "pin")), &cfg)
+	if field == "duress" {
+		return cfg.Duress
+	}
+	return cfg.Pin
+}
+
+func setModuleEnabled(u *User, moduleType string, config string, enabled bool) {
+	now := time.Now()
+	for i := range u.SecurityModules {
+		if u.SecurityModules[i].ModuleType == moduleType {
+			u.SecurityModules[i].Config = config
+			u.SecurityModules[i].Enabled = enabled
+			u.SecurityModules[i].CreatedAt = now
+			return
+		}
+	}
+	u.SecurityModules = append(u.SecurityModules, SecurityModule{
+		Enabled:    enabled,
+		ModuleType: moduleType,
+		Config:     config,
+		CreatedAt:  now,
+	})
+}
+
+func requireSession(w http.ResponseWriter, r *http.Request) (string, bool) {
 	cookie, err := r.Cookie("session")
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		return "", false
 	}
-
 	store.mu.RLock()
 	session, exists := store.Sessions[cookie.Value]
 	store.mu.RUnlock()
-
 	if !exists || time.Now().After(session.ExpiresAt) {
 		http.Error(w, "Session expired", http.StatusUnauthorized)
-		return
+		return "", false
 	}
+	return session.Email, true
+}
 
-	email := session.Email
-
+func requireUser(email string, w http.ResponseWriter) *User {
 	store.mu.RLock()
 	user := store.Users[email]
 	store.mu.RUnlock()
-
 	if user == nil {
 		http.Error(w, "User not found", http.StatusNotFound)
+		return nil
+	}
+	return user
+}
+
+func totpSetupHandler(w http.ResponseWriter, r *http.Request) {
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	if requireUser(email, w) == nil {
 		return
 	}
 
-	// Generate TOTP key
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      "Wellness Ping",
 		AccountName: email,
@@ -563,14 +904,12 @@ func totpSetupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return the key and URL
 	data := map[string]string{
-		"Secret":     key.Secret(),
-		"QRURL":      key.URL(),
-		"Email":      email,
-		"Version":    VERSION,
+		"Secret":  key.Secret(),
+		"QRURL":   key.URL(),
+		"Email":   email,
+		"Version": VERSION,
 	}
-
 	tmpl := template.Must(template.ParseFiles("templates/totp_setup.html"))
 	tmpl.Execute(w, data)
 }
@@ -580,177 +919,249 @@ func totpVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/settings", http.StatusSeeOther)
 		return
 	}
-
-	cookie, err := r.Cookie("session")
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	user := requireUser(email, w)
+	if user == nil {
 		return
 	}
 
-	store.mu.RLock()
-	session, exists := store.Sessions[cookie.Value]
-	store.mu.RUnlock()
-
-	if !exists || time.Now().After(session.ExpiresAt) {
-		http.Error(w, "Session expired", http.StatusUnauthorized)
-		return
-	}
-
-	email := session.Email
 	secret := r.FormValue("secret")
 	code := r.FormValue("code")
-
-	// Verify the code
 	if !totp.Validate(code, secret) {
 		http.Error(w, "Invalid code. Please try again.", http.StatusBadRequest)
 		return
 	}
 
-	// Enable TOTP module
+	cfg, _ := json.Marshal(TOTPConfig{Secret: secret})
 	store.mu.Lock()
-	user, exists := store.Users[email]
-	if !exists {
-		store.mu.Unlock()
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Add or update TOTP module
-	found := false
-	for i, mod := range user.SecurityModules {
-		if mod.ModuleType == "totp" {
-			user.SecurityModules[i].Config = secret
-			user.SecurityModules[i].Enabled = true
-			user.SecurityModules[i].CreatedAt = time.Now()
-			found = true
-			break
-		}
-	}
-	if !found {
-		user.SecurityModules = append(user.SecurityModules, SecurityModule{
-			Enabled:    true,
-			ModuleType: "totp",
-			Config:     secret,
-			CreatedAt:  time.Now(),
-		})
-	}
+	setModuleEnabled(user, "totp", string(cfg), true)
 	store.mu.Unlock()
 	saveStore()
 
 	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
-func pinSetupHandler(w http.ResponseWriter, r *http.Request) {
+func totpDisableHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Redirect(w, r, "/settings", http.StatusSeeOther)
 		return
 	}
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	user := requireUser(email, w)
+	if user == nil {
+		return
+	}
+	store.mu.Lock()
+	setModuleEnabled(user, "totp", "", false)
+	store.mu.Unlock()
+	saveStore()
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
 
-	cookie, err := r.Cookie("session")
+func pinDisableHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	user := requireUser(email, w)
+	if user == nil {
+		return
+	}
+	store.mu.Lock()
+	setModuleEnabled(user, "pin", "", false)
+	store.mu.Unlock()
+	saveStore()
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
+
+func passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	user := requireUser(email, w)
+	if user == nil {
+		return
+	}
+
+	wu := wauserFor(user)
+	options, sessionData, err := webAuthn.BeginRegistration(wu)
 	if err != nil {
+		http.Error(w, "Failed to begin registration", http.StatusInternalServerError)
+		return
+	}
+
+	waSessions.Lock()
+	waSessions.m["register:"+email] = sessionData
+	waSessions.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(options)
+}
+
+func passkeyRegisterFinish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	user := requireUser(email, w)
+	if user == nil {
+		return
+	}
+
+	waSessions.RLock()
+	sessionData, exists := waSessions.m["register:"+email]
+	waSessions.RUnlock()
+	if !exists {
+		http.Error(w, "No registration session", http.StatusBadRequest)
+		return
+	}
+
+	wu := wauserFor(user)
+	credential, err := webAuthn.FinishRegistration(wu, *sessionData, r)
+	if err != nil {
+		http.Error(w, "Registration failed", http.StatusBadRequest)
+		return
+	}
+
+	waSessions.Lock()
+	delete(waSessions.m, "register:"+email)
+	waSessions.Unlock()
+
+	encoded, err := marshalCredential(credential)
+	if err != nil {
+		http.Error(w, "Failed to store credential", http.StatusInternalServerError)
+		return
+	}
+	cfg, _ := json.Marshal(PasskeyConfig{Credential: encoded})
+	store.mu.Lock()
+	setModuleEnabled(user, "passkey", string(cfg), true)
+	store.mu.Unlock()
+	saveStore()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func passkeyDisableHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
+	email, ok := requireSession(w, r)
+	if !ok {
+		return
+	}
+	user := requireUser(email, w)
+	if user == nil {
+		return
+	}
+	store.mu.Lock()
+	setModuleEnabled(user, "passkey", "", false)
+	store.mu.Unlock()
+	saveStore()
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+}
+
+// ---------------------------------------------------------------------------
+// Inbound email (reply PONG)
+// ---------------------------------------------------------------------------
+
+func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	expectedSecret := os.Getenv("INBOUND_SECRET")
+	if expectedSecret == "" {
+		log.Printf("INBOUND_SECRET not set!")
+		http.Error(w, "Server configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	providedSecret := r.URL.Query().Get("secret")
+	if providedSecret != expectedSecret {
+		log.Printf("Invalid inbound secret from IP: %s", r.RemoteAddr)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	store.mu.RLock()
-	session, exists := store.Sessions[cookie.Value]
-	store.mu.RUnlock()
+	var inboundEmail struct {
+		From      string `json:"From"`
+		To        string `json:"To"`
+		Subject   string `json:"Subject"`
+		TextBody  string `json:"TextBody"`
+		HtmlBody  string `json:"HtmlBody"`
+		MessageID string `json:"MessageID"`
+	}
 
-	if !exists || time.Now().After(session.ExpiresAt) {
-		http.Error(w, "Session expired", http.StatusUnauthorized)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&inboundEmail); err != nil {
+		log.Printf("Error decoding inbound email: %v", err)
+		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	email := session.Email
-	pinType := r.FormValue("pin_type") // "pin" or "duress"
-	pin := r.FormValue("pin")
+	bodyText := strings.ToLower(inboundEmail.TextBody)
+	if !strings.Contains(bodyText, "pong") {
+		log.Printf("Email from %s doesn't contain PONG, ignoring", inboundEmail.From)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
-	if pin == "" {
-		http.Error(w, "PIN is required", http.StatusBadRequest)
+	fromEmail := extractEmail(inboundEmail.From)
+	if fromEmail == "" {
+		log.Printf("Could not extract email from: %s", inboundEmail.From)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	store.mu.Lock()
-	user, exists := store.Users[email]
+	user, exists := store.Users[fromEmail]
+	var wasAlerted bool
+	if exists {
+		wasAlerted = user.AlertSent
+		user.LastPing = time.Now()
+		user.LastReminderNum = 0
+		user.AlertSent = false
+	}
+	store.mu.Unlock()
+
 	if !exists {
-		store.mu.Unlock()
-		http.Error(w, "User not found", http.StatusNotFound)
+		log.Printf("No user found for email: %s", fromEmail)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
-
-	// Add or update PIN module
-	found := false
-	for i, mod := range user.SecurityModules {
-		if mod.ModuleType == pinType {
-			user.SecurityModules[i].Config = pin
-			user.SecurityModules[i].Enabled = true
-			user.SecurityModules[i].CreatedAt = time.Now()
-			found = true
-			break
-		}
-	}
-	if !found {
-		user.SecurityModules = append(user.SecurityModules, SecurityModule{
-			Enabled:    true,
-			ModuleType: pinType,
-			Config:     pin,
-			CreatedAt:  time.Now(),
-		})
-	}
-	store.mu.Unlock()
-	saveStore()
-
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
-}
-
-func pinVerifyHandler(w http.ResponseWriter, r *http.Request) {
-	// For PIN-based check-in without email link
-	pin := r.URL.Query().Get("pin")
-	pinType := r.URL.Query().Get("type") // "pin" or "duress"
-
-	if pin == "" {
-		http.Error(w, "PIN required", http.StatusBadRequest)
-		return
-	}
-
-	store.mu.Lock()
-	var foundUser *User
-	for _, user := range store.Users {
-		for _, mod := range user.SecurityModules {
-			if mod.ModuleType == pinType && mod.Enabled && mod.Config == pin {
-				foundUser = user
-				break
-			}
-		}
-	}
-	store.mu.Unlock()
-
-	if foundUser == nil {
-		http.Error(w, "Invalid PIN", http.StatusUnauthorized)
-		return
-	}
-
-	if pinType == "duress" {
-		log.Printf("DURESS: User %s triggered duress PIN", foundUser.Email)
-		store.mu.Lock()
-		foundUser.AlertSent = true
-		store.mu.Unlock()
-		sendAlert(foundUser)
-		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
-		return
-	}
-
-	// Normal PIN check-in
-	store.mu.Lock()
-	foundUser.LastPing = time.Now()
-	foundUser.LastReminderNum = 0
-	foundUser.AlertSent = false
-	store.mu.Unlock()
 
 	saveStore()
 
-	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
+	if wasAlerted {
+		sendAllClearEmail(user)
+	}
+
+	sendReplyEmail(fromEmail, inboundEmail.MessageID, inboundEmail.Subject, inboundEmail.TextBody)
+
+	w.WriteHeader(http.StatusOK)
 }
+
+// ---------------------------------------------------------------------------
+// Emails
+// ---------------------------------------------------------------------------
 
 func sendPing(user *User, reminderNum int) {
 	link := fmt.Sprintf("https://wellness-p.ing/pong?token=%s", user.Token)
@@ -957,6 +1368,12 @@ func loadStore() {
 	if store.Sessions == nil {
 		store.Sessions = make(map[string]*Session)
 	}
+	if store.Users == nil {
+		store.Users = make(map[string]*User)
+	}
+	if store.PendingVerifications == nil {
+		store.PendingVerifications = make(map[string]*PendingVerification)
+	}
 }
 
 func saveStore() {
@@ -1039,7 +1456,6 @@ func pingScheduler() {
 				continue
 			}
 			if user.PausedUntil != nil && time.Now().After(*user.PausedUntil) {
-				// Auto-resume after pause expires
 				user.PausedUntil = nil
 				log.Printf("Auto-resuming user %s after vacation pause", user.Email)
 				needsSave = true

@@ -72,3 +72,40 @@ button {
 button {
     cursor: pointer;
 }
+
+.secmodule {
+    border: 1px solid light-dark(#ccc, #555);
+    border-radius: 6px;
+    padding: 15px;
+    margin: 15px 0;
+}
+
+.secmodule.greyed {
+    opacity: 0.55;
+    background: light-dark(#f4f4f4, #222);
+}
+
+.secmodule.greyed input,
+.secmodule.greyed button,
+.secmodule.greyed a,
+.secmodule.greyed textarea {
+    pointer-events: none;
+}
+
+.mod-check {
+    cursor: pointer;
+    display: block;
+    margin-bottom: 10px;
+}
+
+.mod-check input {
+    margin-right: 8px;
+}
+
+.secmod-body {
+    margin-top: 10px;
+}
+
+.mod-btn {
+    padding: 6px 12px;
+}
