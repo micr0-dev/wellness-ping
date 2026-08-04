@@ -194,25 +194,54 @@
             });
         }
 
+        function b64urlToBuf(b64) {
+            b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return bytes; // ArrayBufferView
+        }
+        function bufToB64url(buf) {
+            const bytes = new Uint8Array(buf);
+            let bin = '';
+            for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
         async function registerPasskey() {
             const status = document.getElementById('passkey-status');
             status.textContent = 'Contacting server...';
             try {
                 const optsResp = await fetch('/passkey-register-begin');
-                if (!optsResp.ok) { status.textContent = 'Failed to begin registration'; return; }
+                if (!optsResp.ok) { status.textContent = await optsResp.text(); return; }
                 const options = await optsResp.json();
+                // WebAuthn needs binary buffers, not base64url strings.
+                options.publicKey.challenge = b64urlToBuf(options.publicKey.challenge);
+                options.publicKey.user.id = b64urlToBuf(options.publicKey.user.id);
+
                 const cred = await navigator.credentials.create(options);
+
+                const payload = {
+                    id: cred.id,
+                    rawId: bufToB64url(cred.rawId),
+                    type: cred.type,
+                    response: {
+                        clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+                        attestationObject: bufToB64url(cred.response.attestationObject),
+                    },
+                    extensions: cred.getClientExtensionResults()
+                };
+
                 const resp = await fetch('/passkey-register-finish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(cred)
+                    body: JSON.stringify(payload)
                 });
                 if (resp.ok) {
                     status.textContent = 'Passkey registered!';
                     setTimeout(() => location.reload(), 800);
                 } else {
-                    const t = await resp.text();
-                    status.textContent = t;
+                    status.textContent = await resp.text();
                 }
             } catch (e) {
                 status.textContent = 'Passkey failed: ' + e.message;
