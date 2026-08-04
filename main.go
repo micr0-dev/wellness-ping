@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -215,6 +217,7 @@ func main() {
 
 	loadStore()
 	initWebAuthn()
+	detectSignal()
 
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/send-code", sendCodeHandler)
@@ -446,11 +449,14 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	for _, e := range strings.Split(alertEmailsStr, ",") {
 		e = strings.TrimSpace(e)
 		if e != "" {
-			if !strings.Contains(e, "@") || !strings.Contains(e, ".") {
-				http.Error(w, fmt.Sprintf("Invalid email address: %s", e), http.StatusBadRequest)
+			// Accept an email, a Signal username (name.##), or a phone number
+			// (default country code +1).
+			kind, canon := classifyContact(e)
+			if kind == "" || canon == "" {
+				http.Error(w, fmt.Sprintf("Invalid alert contact: %s", e), http.StatusBadRequest)
 				return
 			}
-			alertEmails = append(alertEmails, e)
+			alertEmails = append(alertEmails, canon)
 		}
 	}
 
@@ -1393,8 +1399,8 @@ func sendAlert(user *User) {
 		body = fmt.Sprintf("WARNING: %s hasn't responded to their wellness ping.\n\nPlease check in on them to ensure they're okay.", user.Email)
 	}
 
-	for _, alertEmail := range user.AlertEmails {
-		sendEmail(alertEmail, subject, body)
+	for _, alertContact := range user.AlertEmails {
+		sendToContact(alertContact, subject, body)
 	}
 }
 
@@ -1405,8 +1411,8 @@ func sendAllClearEmail(user *User) {
 		body = fmt.Sprintf("Good news! %s has now checked in and confirmed they're okay.", user.Email)
 	}
 
-	for _, alertEmail := range user.AlertEmails {
-		sendEmail(alertEmail, subject, body)
+	for _, alertContact := range user.AlertEmails {
+		sendToContact(alertContact, subject, body)
 	}
 }
 
@@ -1559,6 +1565,172 @@ func extractEmail(from string) string {
 	}
 
 	return from
+}
+
+// ---------------------------------------------------------------------------
+// Signal (via signal-cli)
+// ---------------------------------------------------------------------------
+
+// OfficialSignalUsername is the account Wellness Ping sends from on Signal.
+const OfficialSignalUsername = "wellness_ping.01"
+
+// signalState tracks whether signal-cli is available and usable on this host.
+type signalState struct {
+	Binary  string
+	Account string
+	Ready   bool
+	Message string
+}
+
+var signal = signalState{}
+
+// signalUsernameRe matches a Signal username (base chars + .## discriminator).
+var signalUsernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,32}\.[0-9]{2}$`)
+
+// detectSignal locates signal-cli and confirms a registered account is present.
+// If it isn't found/set up we do NOT fail the process - we fall back to email
+// for dev, but log loudly so it's obvious Signal is not working.
+func detectSignal() {
+	bin := os.Getenv("SIGNAL_CLI_PATH")
+	if bin == "" {
+		b, err := exec.LookPath("signal-cli")
+		if err != nil {
+			signal.Message = "signal-cli not found on PATH (set SIGNAL_CLI_PATH to enable); Signal NOT working - falling back to email"
+			log.Printf("WARNING: %s", signal.Message)
+			return
+		}
+		bin = b
+	}
+	signal.Binary = bin
+
+	signal.Account = os.Getenv("SIGNAL_ACCOUNT")
+	if signal.Account == "" {
+		signal.Message = "signal-cli found but SIGNAL_ACCOUNT is not set; cannot send - falling back to email"
+		log.Printf("WARNING: %s", signal.Message)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "listAccounts", "--output=json").Output()
+	if err != nil {
+		signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts failed: %v - Signal NOT working; falling back to email", bin, err)
+		log.Printf("WARNING: %s", signal.Message)
+		return
+	}
+
+	if !strings.Contains(string(out), signal.Account) && strings.Contains(signal.Account, "+") {
+		// Account not found among registered accounts.
+		signal.Message = fmt.Sprintf("signal-cli found (%s) but account %s is not registered (listAccounts). Signal NOT working; falling back to email", bin, signal.Account)
+		log.Printf("WARNING: %s", signal.Message)
+		return
+	}
+
+	signal.Ready = true
+	signal.Message = fmt.Sprintf("Signal enabled using %s (account %s); sending as %s", bin, signal.Account, OfficialSignalUsername)
+	log.Printf("%s", signal.Message)
+}
+
+// classifyContact decides what a free-form contact identifier is and returns its
+// kind ("email"/"signal"/"phone") plus a canonical form. A bare number defaults
+// to country code +1 and handles +, 00, spaces, parens and dashes.
+func classifyContact(raw string) (kind, canonical string) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", ""
+	}
+	if strings.Contains(s, "@") {
+		return "email", strings.ToLower(s)
+	}
+	if signalUsernameRe.MatchString(s) {
+		return "signal", strings.ToLower(s)
+	}
+	// Otherwise treat as a phone number, stripping non-digits.
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, s)
+	if strings.HasPrefix(s, "+") {
+		return "phone", "+" + digits
+	}
+	if strings.HasPrefix(s, "00") {
+		return "phone", "+" + digits[2:]
+	}
+	return "phone", "+1" + digits
+}
+
+// signalSend runs signal-cli to deliver a message to a Signal contact
+// (username with u: prefix, or an E.164 phone number).
+func signalSend(to string, body string) error {
+	if !signal.Ready {
+		return fmt.Errorf("Signal is not ready")
+	}
+	kind, canon := classifyContact(to)
+	var recArg string
+	switch kind {
+	case "signal":
+		recArg = "u:" + canon
+	case "phone":
+		recArg = canon
+	default:
+		return fmt.Errorf("cannot send Signal to %q", to)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "send", "--message-from-stdin", recArg)
+	cmd.Stdin = strings.NewReader(body)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("signal-cli send failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// firstContact tracks which Signal recipients we have already messaged, so the
+// "confirm it matches" notice is only sent once per contact.
+var firstContact = struct {
+	sync.Mutex
+	m map[string]bool
+}{m: map[string]bool{}}
+
+// signalFirstContactNotice returns a verification notice the first time we
+// message a given Signal recipient, or "" for established contacts.
+func signalFirstContactNotice(to string) string {
+	firstContact.Lock()
+	defer firstContact.Unlock()
+	if firstContact.m[to] {
+		return ""
+	}
+	firstContact.m[to] = true
+	return fmt.Sprintf("This message is from the official Wellness Ping Signal account (username: %s).\n\nIf this account does not match the one you expected, do NOT share any personal or location details, and let us know. Please confirm this matches before sharing anything sensitive.\n\n---\n\n", OfficialSignalUsername)
+}
+
+// sendSignalTo sends a Signal message, prepending the first-contact notice once.
+func sendSignalTo(to, body string) error {
+	notice := signalFirstContactNotice(to)
+	if notice != "" {
+		body = notice + body
+	}
+	return signalSend(to, body)
+}
+
+// sendToContact dispatches a notification to a single contact by its best
+// channel: email for email addresses, Signal for usernames/phone numbers.
+func sendToContact(contact, subject, body string) {
+	kind, _ := classifyContact(contact)
+	switch kind {
+	case "email":
+		sendEmail(contact, subject, body)
+	case "signal", "phone":
+		if err := sendSignalTo(contact, subject+"\n\n"+body); err != nil {
+			log.Printf("WARNING: could not alert %s via Signal: %v", contact, err)
+		}
+	default:
+		sendEmail(contact, subject, body)
+	}
 }
 
 func generateCode() string {

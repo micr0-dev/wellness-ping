@@ -28,15 +28,15 @@
         {{if .User}}
         <h3>Current Settings</h3>
         <p><b>Email:</b> {{.User.Email}}</p>
-        <p><b>Alert Emails:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
+        <p><b>Alert Contacts:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
         <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
         <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
         {{if .User.PausedUntil}}<p><b>Vacation Pause:</b> Active until {{.User.PausedUntil}}</p>{{end}}
         <br>
         {{end}}
 
-        <label>Alert Email List (comma-separated):</label><br>
-        <input type="text" name="alert_emails" placeholder="friend@email.com, family@email.com" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
+        <label>Alert Contacts (comma-separated email / Signal username / phone):</label><br>
+        <input type="text" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
 
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">
