@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/pquerna/otp/totp"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 const VERSION = "2.0.0"
@@ -384,8 +387,6 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		"PasskeyEnabled":    moduleEnabled(user, "passkey"),
 		"TOTPConfigured":    moduleConfigured(user, "totp"),
 		"PasskeyConfigured": moduleConfigured(user, "passkey"),
-		"PinPin":            modulePINConfig(user, "pin"),
-		"PinDuress":         modulePINConfig(user, "duress"),
 	}
 
 	tmpl := template.Must(template.ParseFiles("templates/settings.html"))
@@ -572,7 +573,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Check-in PIN cannot be empty when enabled", http.StatusBadRequest)
 			return
 		}
-		cfg, _ := json.Marshal(PINConfig{Pin: pinVal, Duress: duressVal})
+		cfg, _ := json.Marshal(PINConfig{Pin: hashSecret(pinVal), Duress: hashSecret(duressVal)})
 		setModuleEnabled(user, "pin", string(cfg), true)
 	} else {
 		old := getModuleConfig(user, "pin")
@@ -831,7 +832,7 @@ func handleChallengeStep(w http.ResponseWriter, r *http.Request, u *User, flow *
 		json.Unmarshal([]byte(moduleConfig(u, "pin")), &cfg)
 
 		// Duress PIN: never a real success - silently alert.
-		if cfg.Duress != "" && pin == cfg.Duress {
+		if cfg.Duress != "" && verifySecret(cfg.Duress, pin) {
 			log.Printf("DURESS: User %s triggered duress PIN", u.Email)
 			store.mu.Lock()
 			u.AlertSent = true
@@ -843,7 +844,7 @@ func handleChallengeStep(w http.ResponseWriter, r *http.Request, u *User, flow *
 		}
 
 		// PIN is a hard requirement when the module is enabled.
-		if cfg.Pin == "" || pin != cfg.Pin {
+		if cfg.Pin == "" || !verifySecret(cfg.Pin, pin) {
 			http.Error(w, "Invalid PIN", http.StatusUnauthorized)
 			return
 		}
@@ -1038,16 +1039,37 @@ func moduleConfigured(u *User, moduleType string) bool {
 	return false
 }
 
-func modulePINConfig(u *User, field string) string {
-	if u == nil {
+
+
+// hashSecret returns "sha256$<salt>$<hash>" for a secret. Salt is per-user
+// random, so identical PINs produce different stored values.
+func hashSecret(secret string) string {
+	if secret == "" {
 		return ""
 	}
-	var cfg PINConfig
-	json.Unmarshal([]byte(moduleConfig(u, "pin")), &cfg)
-	if field == "duress" {
-		return cfg.Duress
+	salt := make([]byte, 16)
+	rand.Read(salt)
+	h := sha256.Sum256(append(salt, []byte(secret)...))
+	return fmt.Sprintf("sha256$%s$%s", base64.RawStdEncoding.EncodeToString(salt), hex.EncodeToString(h[:]))
+}
+
+// verifySecret checks a candidate against a stored value. It supports the
+// salted-hash format and, for backward compatibility, legacy plaintext.
+func verifySecret(stored, candidate string) bool {
+	if stored == "" {
+		return false
 	}
-	return cfg.Pin
+	parts := strings.Split(stored, "$")
+	if len(parts) == 3 && parts[0] == "sha256" {
+		salt, err := base64.RawStdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return false
+		}
+		h := sha256.Sum256(append(salt, []byte(candidate)...))
+		return hex.EncodeToString(h[:]) == parts[2]
+	}
+	// legacy plaintext value
+	return stored == candidate
 }
 
 func setModuleEnabled(u *User, moduleType string, config string, enabled bool) {
@@ -1117,9 +1139,17 @@ func totpSetupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := map[string]string{
+	// Render the QR code locally so the TOTP secret never leaves this server.
+	png, err := qrcode.Encode(key.URL(), qrcode.Medium, 256)
+	if err != nil {
+		http.Error(w, "Failed to generate QR code", http.StatusInternalServerError)
+		return
+	}
+	qrDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+
+	data := map[string]interface{}{
 		"Secret":  key.Secret(),
-		"QRURL":   key.URL(),
+		"QR":      template.URL(qrDataURI),
 		"Email":   email,
 		"Version": VERSION,
 	}
@@ -1288,6 +1318,14 @@ func inboundEmailHandler(w http.ResponseWriter, r *http.Request) {
 	user, exists := store.Users[fromEmail]
 	var wasAlerted bool
 	if exists {
+		// With any security module enabled, a reply-PONG alone is not a valid
+		// check-in - it would bypass PIN/TOTP/passkey. Ignore it.
+		if len(enabledModules(user)) > 0 {
+			store.mu.Unlock()
+			log.Printf("PONG email reply ignored for %s: security modules enabled", user.Email)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		wasAlerted = user.AlertSent
 		user.LastPing = time.Now()
 		user.LastReminderNum = 0
@@ -1321,8 +1359,15 @@ func sendPing(user *User, reminderNum int) {
 	subject := "Wellness Ping"
 	body := ""
 
+	// Reply-PONG only works when no security modules are enabled; otherwise it
+	// would bypass PIN/TOTP/passkey.
+	replyHint := "\n\nOr reply PONG to this email."
+	if len(enabledModules(user)) > 0 {
+		replyHint = ""
+	}
+
 	if reminderNum == 0 {
-		body = fmt.Sprintf("Hi! Just checking in.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", link)
+		body = fmt.Sprintf("Hi! Just checking in.\n\nClick here to confirm you're okay: %s%s", link, replyHint)
 	} else {
 		var timeRemaining string
 		if user.PingFrequency == "daily" {
@@ -1333,7 +1378,7 @@ func sendPing(user *User, reminderNum int) {
 			timeRemaining = fmt.Sprintf("%d days", daysLeft)
 		}
 
-		body = fmt.Sprintf("Reminder: You haven't checked in yet.\n\nYou have %s remaining before your contacts are notified.\n\nClick here to confirm you're okay: %s\n\nOr reply PONG to this email.", timeRemaining, link)
+		body = fmt.Sprintf("Reminder: You haven't checked in yet.\n\nYou have %s remaining before your contacts are notified.\n\nClick here to confirm you're okay: %s%s", timeRemaining, link, replyHint)
 		subject = "Wellness Ping - Reminder"
 	}
 

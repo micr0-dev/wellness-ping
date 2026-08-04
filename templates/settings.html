@@ -82,9 +82,9 @@
             <div class="secmod-body" id="pin-body">
                 <p style="color: #666;">A PIN is required to complete a check-in or sign into settings. The Duress PIN silently alerts your contacts instead of confirming.</p>
                 <label>Check-in PIN:</label><br>
-                <input type="password" name="pin_pin" placeholder="Choose a PIN" value="{{.PinPin}}" {{if not .PinEnabled}}disabled{{end}}><br><br>
+                <input type="password" name="pin_pin" placeholder="Choose a PIN" {{if not .PinEnabled}}disabled{{end}}><br><br>
                 <label>Duress PIN (optional):</label><br>
-                <input type="password" name="pin_duress" placeholder="Separate duress PIN" value="{{.PinDuress}}" {{if not .PinEnabled}}disabled{{end}}><br>
+                <input type="password" name="pin_duress" placeholder="Separate duress PIN" {{if not .PinEnabled}}disabled{{end}}><br>
                 {{if not .PinEnabled}}<small style="color: #666;">Tick the box to set up your PIN.</small>{{end}}
             </div>
         </div>
