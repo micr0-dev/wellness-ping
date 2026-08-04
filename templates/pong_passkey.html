@@ -17,8 +17,8 @@
     <footer>Version: {{.Version}}</footer>
 
     <script>
-        const token = {{.Token | printf "%q"}};
-        const action = {{.Action | printf "%q"}};
+        const token = "{{.Token}}";
+        const action = "{{.Action}}";
 
         function b64urlToBuf(b64) {
             b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
