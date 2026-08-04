@@ -101,6 +101,8 @@
                 <p>{{if .TOTPEnabled}}<span style="color: green;">Enabled</span> - a code is required to sign in and to check in{{else}}<span style="color: #888;">Set up but currently off</span> - tick the box and save to require it{{end}}</p>
                 <a class="mod-btn" href="/totp-setup">Reconfigure</a>
                 <button type="submit" class="mod-btn danger" name="action" value="clear_totp">Clear 2FA</button>
+                {{else if not .User}}
+                <p><span style="color: #888;">Save your settings first - then you can set up 2FA.</span></p>
                 {{else}}
                 <p><span style="color: #888;">Not set up.</span></p>
                 <a class="mod-btn" href="/totp-setup">Set up Authenticator App</a>
@@ -121,6 +123,8 @@
                 <button type="button" class="mod-btn" onclick="registerPasskey()">Re-register Passkey</button>
                 <button type="submit" class="mod-btn danger" name="action" value="clear_passkey">Remove Passkey</button>
                 <span id="passkey-status" style="color: #666;"></span>
+                {{else if not .User}}
+                <p><span style="color: #888;">Save your settings first - then you can register a passkey.</span></p>
                 {{else}}
                 <p><span style="color: #888;">Not set up.</span></p>
                 <button type="button" class="mod-btn" onclick="registerPasskey()">Register Passkey</button>
@@ -197,7 +201,7 @@
                 const optsResp = await fetch('/passkey-register-begin');
                 if (!optsResp.ok) { status.textContent = 'Failed to begin registration'; return; }
                 const options = await optsResp.json();
-                const cred = await navigator.credentials.create({ publicKey: options });
+                const cred = await navigator.credentials.create(options);
                 const resp = await fetch('/passkey-register-finish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

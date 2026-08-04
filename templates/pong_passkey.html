@@ -28,7 +28,7 @@
                 if (!optsResp.ok) throw new Error('Failed to begin login');
                 const options = await optsResp.json();
 
-                const cred = await navigator.credentials.get({ publicKey: options });
+                const cred = await navigator.credentials.get(options);
 
                 const resp = await fetch('/passkey-login-finish?token=' + encodeURIComponent(token), {
                     method: 'POST',
