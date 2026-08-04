@@ -104,80 +104,82 @@
     </form>
     {{end}}
 
-    <hr>
-    <h3>Extra Security</h3>
-    <p>Enable additional security modules. When enabled, you must authenticate with each module to check in.</p>
-    <br>
+    <details>
+        <summary><b>Extra Security</b></summary>
+        <br>
+        <p>Enable additional security modules. When enabled, you must authenticate with each module to check in.</p>
+        <br>
 
-    {{if .User}}
-    <table style="width: 100%; border-collapse: collapse;">
-        <tr style="border-bottom: 1px solid #ddd;">
-            <th style="text-align: left; padding: 10px;">Module</th>
-            <th style="text-align: left; padding: 10px;">Status</th>
-            <th style="text-align: left; padding: 10px;">Actions</th>
-        </tr>
+        {{if .User.SecurityModules}}
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr style="border-bottom: 1px solid #ddd;">
+                <th style="text-align: left; padding: 10px;">Module</th>
+                <th style="text-align: left; padding: 10px;">Status</th>
+                <th style="text-align: left; padding: 10px;">Actions</th>
+            </tr>
 
-        {{range .User.SecurityModules}}
-        <tr style="border-bottom: 1px solid #eee;">
-            <td style="padding: 10px;">
-                {{if eq .ModuleType "pin"}}
-                <b>Check-in PIN</b><br>
-                <small style="color: #666;">Enter a PIN to check in directly</small>
-                {{else if eq .ModuleType "duress"}}
-                <b>Duress PIN</b><br>
-                <small style="color: #666;">Silently alerts contacts when used</small>
-                {{else if eq .ModuleType "totp"}}
-                <b>Authenticator App (2FA)</b><br>
-                <small style="color: #666;">Requires code from your authenticator app</small>
-                {{else if eq .ModuleType "passkey"}}
-                <b>Passkey</b><br>
-                <small style="color: #666;">WebAuthn authentication</small>
-                {{end}}
-            </td>
-            <td style="padding: 10px;">
-                {{if .Enabled}}
-                <span style="color: green;">Enabled</span>
-                {{else}}
-                <span style="color: #666;">Disabled</span>
-                {{end}}
-            </td>
-            <td style="padding: 10px;">
-                {{if eq .ModuleType "totp"}}
-                <a href="/totp-setup">Reconfigure</a>
-                {{else}}
-                <a href="/pin-setup?type={{.ModuleType}}">Reconfigure</a>
-                {{end}}
-            </td>
-        </tr>
+            {{range .User.SecurityModules}}
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 10px;">
+                    {{if eq .ModuleType "pin"}}
+                    <b>Check-in PIN</b><br>
+                    <small style="color: #666;">Enter a PIN to check in directly</small>
+                    {{else if eq .ModuleType "duress"}}
+                    <b>Duress PIN</b><br>
+                    <small style="color: #666;">Silently alerts contacts when used</small>
+                    {{else if eq .ModuleType "totp"}}
+                    <b>Authenticator App (2FA)</b><br>
+                    <small style="color: #666;">Requires code from your authenticator app</small>
+                    {{else if eq .ModuleType "passkey"}}
+                    <b>Passkey</b><br>
+                    <small style="color: #666;">WebAuthn authentication</small>
+                    {{end}}
+                </td>
+                <td style="padding: 10px;">
+                    {{if .Enabled}}
+                    <span style="color: green;">Enabled</span>
+                    {{else}}
+                    <span style="color: #666;">Disabled</span>
+                    {{end}}
+                </td>
+                <td style="padding: 10px;">
+                    {{if eq .ModuleType "totp"}}
+                    <a href="/totp-setup">Reconfigure</a>
+                    {{else}}
+                    <form action="/pin-setup" method="POST" style="display: inline;">
+                        <input type="hidden" name="pin_type" value="{{.ModuleType}}">
+                        <button type="submit">Reconfigure</button>
+                    </form>
+                    {{end}}
+                </td>
+            </tr>
+            {{end}}
+        </table>
+        <br>
         {{end}}
-    </table>
-    <br>
 
-    <h4>Add Security Module</h4>
-    <form action="/pin-setup" method="POST" style="display: inline;">
-        <input type="hidden" name="pin_type" value="pin">
-        <input type="password" name="pin" placeholder="Set a check-in PIN" required>
-        <button type="submit">Add Check-in PIN</button>
-    </form>
-    <br><br>
+        <h4>Add Security Module</h4>
+        <form action="/pin-setup" method="POST" style="display: inline;">
+            <input type="hidden" name="pin_type" value="pin">
+            <input type="password" name="pin" placeholder="Set a check-in PIN" required>
+            <button type="submit">Add Check-in PIN</button>
+        </form>
+        <br><br>
 
-    <form action="/pin-setup" method="POST" style="display: inline;">
-        <input type="hidden" name="pin_type" value="duress">
-        <input type="password" name="pin" placeholder="Set a duress PIN" required>
-        <button type="submit">Add Duress PIN</button>
-    </form>
-    <br><br>
+        <form action="/pin-setup" method="POST" style="display: inline;">
+            <input type="hidden" name="pin_type" value="duress">
+            <input type="password" name="pin" placeholder="Set a duress PIN" required>
+            <button type="submit">Add Duress PIN</button>
+        </form>
+        <br><br>
 
-    <form action="/totp-setup" method="GET" style="display: inline;">
-        <button type="submit">Add Authenticator App (2FA)</button>
-    </form>
-    <br><br>
+        <form action="/totp-setup" method="GET" style="display: inline;">
+            <button type="submit">Add Authenticator App (2FA)</button>
+        </form>
+        <br><br>
 
-    <span style="color: #999;">Passkey (coming soon)</span>
-
-    {{else}}
-    <p style="color: #666;">Log in to configure security modules.</p>
-    {{end}}
+        <span style="color: #999;">Passkey (coming soon)</span>
+    </details>
 
     <br><br>
     <a href="/">Back to home</a>
