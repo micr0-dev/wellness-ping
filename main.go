@@ -447,6 +447,24 @@ type PendingVerification struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// PendingSignup tracks a new Signal-identifier signup that has not yet had
+// its first contact with our bot acknowledged. This only applies to signup
+// (a brand-new account), not to login.
+type PendingSignup struct {
+	Canonical string
+	Kind      string // "signal" or "phone"
+	Code      string
+	DMSeen    bool
+	CreatedAt time.Time
+}
+
+// pendingSignups holds in-progress Signal signups awaiting the user's first
+// DM to our bot. In-memory only (short-lived, non-persistent).
+var pendingSignups = struct {
+	sync.RWMutex
+	m map[string]*PendingSignup
+}{m: map[string]*PendingSignup{}}
+
 type Session struct {
 	Email     string    `json:"email"`
 	Token     string    `json:"token"`
@@ -650,6 +668,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
 	mux.HandleFunc("/send-code", sendCodeHandler)
+	mux.HandleFunc("/dm-continue", dmContinueHandler)
 	mux.HandleFunc("/verify-code", verifyCodeHandler)
 	mux.HandleFunc("/settings", settingsHandler)
 	mux.HandleFunc("/update", updateHandler)
@@ -743,28 +762,69 @@ func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	code := generateCode()
 
-	store.mu.Lock()
-	store.PendingVerifications[canonical] = &PendingVerification{
-		Email:     canonical,
-		Code:      code,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	store.mu.Unlock()
-
-	subject := "Wellness Ping Verification Code"
-	body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
-
-	viaSignal := false
 	if kind == "email" {
+		// Email signup/login: send the code by email as before.
+		store.mu.Lock()
+		store.PendingVerifications[canonical] = &PendingVerification{
+			Email:     canonical,
+			Code:      code,
+			ExpiresAt: time.Now().Add(10 * time.Minute),
+		}
+		store.mu.Unlock()
+
+		subject := "Wellness Ping Verification Code"
+		body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
 		sendEmail(canonical, subject, body)
-	} else {
-		// Send the code over Signal for a phone number or Signal username.
-		viaSignal = true
-		sendVerificationCodeSignal(canonical, code)
+
+		data := map[string]interface{}{"Email": canonical, "ViaSignal": false}
+		tmpl := template.Must(template.ParseFiles("templates/verify.html"))
+		tmpl.Execute(w, data)
+		return
 	}
 
-	data := map[string]interface{}{"Email": canonical, "ViaSignal": viaSignal}
-	tmpl := template.Must(template.ParseFiles("templates/verify.html"))
+	// Signal identifier (phone number or username).
+	store.mu.RLock()
+	_, existing := store.Users[canonical]
+	store.mu.RUnlock()
+
+	if existing {
+		// LOGIN: we've messaged this account before, so send the code directly
+		// (the conversation already exists - no new-contact throttle).
+		store.mu.Lock()
+		store.PendingVerifications[canonical] = &PendingVerification{
+			Email:     canonical,
+			Code:      code,
+			ExpiresAt: time.Now().Add(10 * time.Minute),
+		}
+		store.mu.Unlock()
+
+		sendVerificationCodeSignal(canonical, code)
+
+		data := map[string]interface{}{"Email": canonical, "ViaSignal": true}
+		tmpl := template.Must(template.ParseFiles("templates/verify.html"))
+		tmpl.Execute(w, data)
+		return
+	}
+
+	// SIGNUP via Signal: require the user to DM our bot first so that when we
+	// send the code we're replying to an established conversation, not burning
+	// a new-contact message (which Signal throttles hardest). We stage the code
+	// now and only ship it once we've seen their incoming DM.
+	pendingSignups.Lock()
+	pendingSignups.m[canonical] = &PendingSignup{
+		Canonical: canonical,
+		Kind:      kind,
+		Code:      code,
+		CreatedAt: time.Now(),
+	}
+	pendingSignups.Unlock()
+
+	data := map[string]interface{}{
+		"Email":   canonical,
+		"From":    OfficialSignalUsername,
+		"Version": VERSION,
+	}
+	tmpl := template.Must(template.ParseFiles("templates/dm.html"))
 	tmpl.Execute(w, data)
 }
 
@@ -2753,8 +2813,12 @@ type signalState struct {
 
 var signal = signalState{}
 
-// signalUsernameRe matches a Signal username (base chars + .## discriminator).
-var signalUsernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,32}\.[0-9]{2}$`)
+// signalUsernameRe matches a valid Signal username per libsignal's rules:
+//   nickname: 3-32 chars, not starting with a digit, chars [a-zA-Z0-9_]
+//   separator: '.'
+//   discriminator: 2-9 digits; 2-digit may not be 00; 3+ digits may not have
+//                 a leading zero (libsignal allows up to 9 digits).
+var signalUsernameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{2,31}\.(?:[1-9][0-9]{2,8}|[0-9][1-9]|[1-9][0-9])$`)
 
 // detectSignal locates signal-cli and confirms a registered account is present.
 // If it isn't found/set up we do NOT fail the process - we fall back to email
@@ -2982,6 +3046,139 @@ func resolveSignalUUID(contact string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// receivedEnvelope is a subset of signal-cli's receive JSON, enough to identify
+// who sent an incoming message.
+type receivedEnvelope struct {
+	SourceNumber string `json:"sourceNumber"`
+	SourceUuid   string `json:"sourceUuid"`
+	SourceName   string `json:"sourceName"`
+	DataMessage  *struct {
+		Message string `json:"message"`
+	} `json:"dataMessage"`
+}
+
+// signalReceive runs signal-cli receive and returns any currently-available
+// incoming messages. It blocks for up to timeoutSec seconds.
+func signalReceive(timeoutSec int) ([]receivedEnvelope, error) {
+	if signal.Binary == "" || signal.Account == "" {
+		return nil, fmt.Errorf("Signal not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec+15)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "--output=json", "receive", "--timeout", fmt.Sprintf("%d", timeoutSec))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	var envs []receivedEnvelope
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var env receivedEnvelope
+		if json.Unmarshal([]byte(line), &env) == nil {
+			envs = append(envs, env)
+		}
+	}
+	return envs, nil
+}
+
+// inboundMatches reports whether a received message came from the given
+// canonical identifier (an E.164 phone number or a Signal username).
+func inboundMatches(env receivedEnvelope, canonical, kind string) bool {
+	switch kind {
+	case "phone":
+		return strings.Contains(env.SourceNumber, canonical)
+	case "signal":
+		if env.SourceUuid == "" {
+			return false
+		}
+		if u, ok := resolveSignalUUID(canonical); ok {
+			return env.SourceUuid == u
+		}
+	}
+	return false
+}
+
+// dmContinueHandler is where a new Signal-identifier signup reports that they
+// have messaged our bot. We check for that incoming message, and only then
+// send the verification code (now to an established conversation).
+func dmContinueHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	raw := strings.TrimSpace(r.FormValue("identifier"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.FormValue("email")) // backwards-compatible
+	}
+	kind, canonical := classifyContact(raw)
+	if kind == "" || canonical == "" {
+		http.Error(w, "Invalid identifier", http.StatusBadRequest)
+		return
+	}
+
+	pendingSignups.RLock()
+	ps := pendingSignups.m[canonical]
+	pendingSignups.RUnlock()
+	if ps == nil || ps.DMSeen {
+		// No staged signup, or already seen - fall through to the regular flow.
+		http.Redirect(w, r, "/send-code", http.StatusSeeOther)
+		return
+	}
+
+	envs, err := signalReceive(2)
+	if err != nil {
+		log.Printf("WARNING: could not check for first DM from %s: %v", canonical, err)
+		renderDM(w, canonical, "We couldn't check your message right now. Hang on a second and try again.")
+		return
+	}
+
+	matched := false
+	for _, e := range envs {
+		if inboundMatches(e, canonical, kind) {
+			matched = true
+			break
+		}
+	}
+
+	if !matched {
+		renderDM(w, canonical, "We haven't seen your message yet. Make sure you sent it from "+canonical+" to "+OfficialSignalUsername+", then try again.")
+		return
+	}
+
+	// DM acknowledged: send the code to the now-established conversation.
+	pendingSignups.Lock()
+	ps.DMSeen = true
+	pendingSignups.Unlock()
+
+	store.mu.Lock()
+	store.PendingVerifications[canonical] = &PendingVerification{
+		Email:     canonical,
+		Code:      ps.Code,
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+	store.mu.Unlock()
+
+	sendVerificationCodeSignal(canonical, ps.Code)
+
+	data := map[string]interface{}{"Email": canonical, "ViaSignal": true}
+	tmpl := template.Must(template.ParseFiles("templates/verify.html"))
+	tmpl.Execute(w, data)
+}
+
+func renderDM(w http.ResponseWriter, canonical, notice string) {
+	data := map[string]interface{}{
+		"Email":   canonical,
+		"From":    OfficialSignalUsername,
+		"Version": VERSION,
+		"Notice":  notice,
+	}
+	tmpl := template.Must(template.ParseFiles("templates/dm.html"))
+	tmpl.Execute(w, data)
 }
 
 // sendToContact dispatches a notification to a single contact by its best

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Message the Bot - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>First, message the bot</h1>
+    <p>To finish signup, send a message from your Signal account <strong>{{.Email}}</strong>
+    to the official Wellness Ping account <strong>{{.From}}</strong>.</p>
+
+    {{if .Notice}}
+    <div class="raised">
+        <p class="note">{{.Notice}}</p>
+    </div>
+    {{end}}
+
+    <form action="/dm-continue" method="POST">
+        <input type="hidden" name="identifier" value="{{.Email}}">
+        <button type="submit">I've sent the message - continue</button>
+    </form>
+
+    <p class="note">This confirms you're a real Signal account and lets us reply
+    without being rate-limited for messaging a brand-new contact. Your code only
+    comes after we've seen your message.</p>
+
+    <p class="back-link"><a href="/">Cancel</a></p>
+
+    <footer>Version: <span class="version">{{.Version}}</span></footer>
+    <script src="/static/version.js"></script>
+</body>
+
+</html>
