@@ -1611,12 +1611,16 @@ func detectSignal() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	// --output is a global flag and must precede the command.
 	out, err := exec.CommandContext(ctx, bin, "--output=json", "listAccounts").Output()
 	if err != nil {
-		signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts failed: %v - Signal NOT working; falling back to email", bin, err)
+		if ctx.Err() == context.DeadlineExceeded {
+			signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts timed out after 60s and was killed - is signal-cli responsive? Signal NOT working; falling back to email", bin)
+		} else {
+			signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts failed: %v - Signal NOT working; falling back to email", bin, err)
+		}
 		log.Printf("WARNING: %s", signal.Message)
 		return
 	}
@@ -1669,7 +1673,7 @@ func signalSendRaw(recArg, body string) error {
 	if !signal.Ready {
 		return fmt.Errorf("Signal is not ready")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "send", "--message-from-stdin", recArg)
 	cmd.Stdin = strings.NewReader(body)
@@ -1701,7 +1705,7 @@ func resolveSignalUUID(contact string) (string, bool) {
 	}
 	kind, canon := classifyContact(contact)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	var args []string
 	args = append(args, "-a", signal.Account, "--output=json", "getUserStatus")
