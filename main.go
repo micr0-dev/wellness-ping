@@ -33,7 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const VERSION = "2.0.4"
+const VERSION = "2.0.3"
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
