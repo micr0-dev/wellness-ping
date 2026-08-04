@@ -36,7 +36,7 @@
 
         <label for="alert_emails">Alert Contacts (comma-separated email / Signal username / phone)</label>
         <input type="text" id="alert_emails" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required>
-        <small class="muted">Phone numbers and Signal usernames are messaged through each contact's Signal account &mdash; not SMS.</small>
+        <small class="muted">Phone numbers and Signal usernames are messaged through each contact's Signal account, not SMS.</small>
 
         <label for="ping_frequency">Ping Frequency</label>
         <select id="ping_frequency" name="ping_frequency">
@@ -68,10 +68,13 @@
         </select>
 
         <label for="checkin_hour">Preferred Check-in Time (your local time)</label>
-        <input type="number" id="checkin_hour" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00
+        <span class="time-field">
+            <input type="number" id="checkin_hour" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required>
+            <span class="time-suffix">: 00</span>
+        </span>
 
         <h3>Extra Security</h3>
-        <p class="muted">Amplify your verification. You can enable any combination &mdash; each enabled module must be completed before a check-in or a settings sign-in is accepted. Tick a module's box to edit it.</p>
+        <p class="muted">Amplify your verification. You can enable any combination, each enabled module must be completed before a check-in or a settings sign-in is accepted. Tick a module's box to edit it.</p>
 
         <!-- Check-in PIN + Duress PIN -->
         <div class="secmodule greyed" id="pin-mod">
@@ -98,11 +101,11 @@
             <div class="secmod-body" id="totp-body">
                 <p class="muted">Requires a 6-digit code from your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
                 {{if .TOTPConfigured}}
-                <p>{{if .TOTPEnabled}}<span class="ok">Enabled</span> &mdash; a code is required to sign in and to check in{{else}}<span class="off">Set up but currently off</span> &mdash; tick the box and save to require it{{end}}</p>
+                <p>{{if .TOTPEnabled}}<span class="ok">Enabled</span>, a code is required to sign in and to check in{{else}}<span class="off">Set up but currently off</span>, tick the box and save to require it{{end}}</p>
                 <button type="button" class="ghost" onclick="location.href='/totp-setup'">Reconfigure</button>
                 <button type="submit" class="danger" name="action" value="clear_totp">Clear 2FA</button>
                 {{else if not .User}}
-                <p class="muted">Save your settings first &mdash; then you can set up 2FA.</p>
+                <p class="muted">Save your settings first, then you can set up 2FA.</p>
                 {{else}}
                 <p class="muted">Not set up.</p>
                 <button type="button" class="ghost" onclick="location.href='/totp-setup'">Set up Authenticator App</button>
@@ -119,12 +122,12 @@
             <div class="secmod-body" id="passkey-body">
                 <p class="muted">Requires a passkey (platform authenticator, security key, or phone).</p>
                 {{if .PasskeyConfigured}}
-                <p>{{if .PasskeyEnabled}}<span class="ok">Enabled</span> &mdash; a passkey is required to sign in and to check in{{else}}<span class="off">Registered but currently off</span> &mdash; tick the box and save to require it{{end}}</p>
+                <p>{{if .PasskeyEnabled}}<span class="ok">Enabled</span>, a passkey is required to sign in and to check in{{else}}<span class="off">Registered but currently off</span>, tick the box and save to require it{{end}}</p>
                 <button type="button" class="ghost" onclick="registerPasskey()">Re-register Passkey</button>
                 <button type="submit" class="danger" name="action" value="clear_passkey">Remove Passkey</button>
                 <span id="passkey-status" class="muted"></span>
                 {{else if not .User}}
-                <p class="muted">Save your settings first &mdash; then you can register a passkey.</p>
+                <p class="muted">Save your settings first, then you can register a passkey.</p>
                 {{else}}
                 <p class="muted">Not set up.</p>
                 <button type="button" class="ghost" onclick="registerPasskey()">Register Passkey</button>
@@ -155,13 +158,13 @@
         <button type="submit" name="action" value="save">Save Settings</button>
 
         {{if .User}}
-        <button type="submit" name="action" value="stop">Stop Service &amp; Delete All Data</button>
+        <button type="submit" class="danger" name="action" value="stop">Stop Service &amp; Delete All Data</button>
         {{end}}
     </form>
 
     {{if .User}}
     <form action="/test-ping" method="POST">
-        <button type="submit" class="ghost">Send Test Ping Now</button>
+        <button type="submit">Send Test Ping Now</button>
     </form>
     {{end}}
 
@@ -171,9 +174,8 @@
         Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
         Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or irc.micr0.dev:6667/6697 |
         Version: {{.Version}}
-        <br>
-        Privacy: We only store your contact identifier, alert contacts, and last check-in time. No logs, no tracking.
-        Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
+        <div class="footer-privacy">Privacy: We only store your contact identifier, alert contacts, and last check-in time. No logs, no tracking.
+        Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.</div>
     </footer>
 
     <script>

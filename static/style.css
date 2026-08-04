@@ -196,16 +196,62 @@ select {
     background-color: var(--bg);
 }
 
+/* Small inline time field (e.g. check-in hour followed by :00) */
+.time-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0 16px;
+}
+
+.time-field input[type="number"] {
+    width: auto;
+    margin: 0;
+    flex: 0 0 auto;
+}
+
+.time-suffix {
+    font-size: 16px;
+    color: var(--fg);
+}
+
+/* Row of inline actions (button + adjacent link) */
+.btn-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+/* Spacing between stacked form widgets */
+form small {
+    display: block;
+    margin: 0 0 12px;
+}
+
+form .cf-turnstile {
+    margin: 8px 0 14px;
+}
+
+form > button {
+    margin-top: 10px;
+}
+
+.footer-privacy {
+    margin-top: 1em;
+}
+
 /* Buttons (plain, no colour fills) --------------------------------------- */
 
 button,
 .mod-btn {
     display: inline-block;
-    padding: 9px 16px;
+    padding: 12px 20px;
     font-size: 16px;
     line-height: 1.2;
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: 999px; /* pill shape */
     background: var(--surface);
     border: 1px solid var(--border);
     color: var(--fg);
@@ -225,7 +271,7 @@ button:disabled,
 button.danger {
     color: var(--danger);
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid var(--danger);
 }
 
 button.ghost,

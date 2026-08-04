@@ -23,10 +23,11 @@
         <input type="hidden" name="secret" value="{{.Secret}}">
         <label for="code">Enter the 6-digit code from your app</label>
         <input type="text" id="code" name="code" class="otp-input" pattern="[0-9]{6}" placeholder="123456" required maxlength="6">
-        <button type="submit">Verify and Enable</button>
+        <div class="btn-row">
+            <button type="submit">Verify and Enable</button>
+            <a class="mod-btn" href="/settings">Cancel</a>
+        </div>
     </form>
-
-    <p><a href="/settings">Cancel</a></p>
 
     <footer>
         Version: {{.Version}} |

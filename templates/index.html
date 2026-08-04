@@ -17,7 +17,7 @@
     <form action="/send-code" method="POST">
         <label for="identifier">Email, phone, or Signal username</label>
         <input type="text" id="identifier" name="identifier" placeholder="you@email.com, +15555550123 (Signal), name.01" required>
-        <small class="muted">Phone numbers and Signal usernames are messaged through their Signal account &mdash; we don't send SMS.</small>
+        <small class="muted">Phone numbers and Signal usernames are messaged through their Signal account, not SMS.</small>
         <div class="cf-turnstile" data-sitekey="{{.TurnstileSiteKey}}"></div>
         <button type="submit">Send Verification Code</button>
     </form>
