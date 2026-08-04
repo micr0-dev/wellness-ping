@@ -1,65 +1,58 @@
 :root {
     color-scheme: light dark;
 
-    /* Design tokens - tuned for good contrast in BOTH light and dark. */
-    --bg: light-dark(#ffffff, #0f1115);
-    --fg: light-dark(#181b20, #e6e8eb);
-    --muted: light-dark(#565c66, #a4abb8);
-    --surface: light-dark(#f4f5f7, #191d25);
-    --border: light-dark(#d3d8df, #3a414d);
-    --accent: light-dark(#0a5bd3, #6ea8ff);
-    --accent-text: light-dark(#ffffff, #0f1115);
-    --ghost-text: light-dark(#0a5bd3, #8ab4ff);
-    --danger: light-dark(#b3261e, #ff7a72);
+    /* Plain, neutral palette (old-school / "php" vibe). No colourful fills. */
+    --bg: light-dark(#ffffff, #101013);
+    --fg: light-dark(#16181c, #e8e8ea);
+    --muted: light-dark(#5a5e66, #9aa0aa);
+    --surface: light-dark(#f3f4f5, #1c1d20);
+    --border: light-dark(#c9ccd1, #3d4046);
+    --focus: light-dark(#0a5bd3, #6ea8ff);
     --ok: light-dark(#1a7f37, #57cd78);
-    --code-bg: light-dark(#eef0f4, #14171d);
+    --danger: light-dark(#b3261e, #ff7a72);
+    --code-bg: light-dark(#f1f1f2, #17181b);
 
-    --radius: 8px;
+    --radius: 6px;
     --pad: 16px;
-    --input-pad: 10px 12px;
 }
 
 * {
     box-sizing: border-box;
 }
 
-html {
-    -webkit-text-size-adjust: 100%;
-}
-
 body {
     font-family: "Inter", "Adwaita Sans", system-ui, -apple-system,
         BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell,
         "Open Sans", "Helvetica Neue", sans-serif;
-    max-width: 660px;
+    max-width: 680px;
     margin: 48px auto;
-    padding: 8px 22px 56px;
+    padding: 8px 24px 56px;
     background: var(--bg);
     color: var(--fg);
     line-height: 1.5;
 }
 
 h1 {
-    font-size: 1.7rem;
+    font-size: 1.65rem;
     line-height: 1.2;
     margin: 0 0 6px;
 }
 
 h2 {
-    font-size: 1.1rem;
+    font-size: 1.08rem;
     font-weight: 500;
     color: var(--muted);
-    margin: 0 0 26px;
+    margin: 0 0 24px;
 }
 
 h3 {
-    font-size: 1.15rem;
-    margin: 30px 0 12px;
+    font-size: 1.12rem;
+    margin: 28px 0 12px;
 }
 
 h4 {
     font-size: 1rem;
-    margin: 20px 0 10px;
+    margin: 18px 0 10px;
 }
 
 p {
@@ -67,8 +60,8 @@ p {
 }
 
 ul {
-    margin: 4px 0 18px;
-    padding-left: 22px;
+    margin: 4px 0 16px;
+    padding-left: 24px;
 }
 
 li {
@@ -76,7 +69,7 @@ li {
 }
 
 a {
-    color: var(--accent);
+    color: var(--focus);
 }
 
 code {
@@ -116,9 +109,8 @@ code {
 .raised {
     padding: var(--pad);
     margin: 16px 0;
-    background: var(--surface);
-    border-left: 4px solid var(--accent);
-    border-radius: var(--radius);
+    border-left: 3px solid var(--border);
+    padding-left: 18px;
 }
 
 .raised > *:last-child {
@@ -128,42 +120,37 @@ code {
 /* Accordion -------------------------------------------------------------- */
 
 details {
-    margin: 18px 0;
+    margin: 16px 0;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg);
-    overflow: hidden;
 }
 
 summary {
     display: block;
     cursor: pointer;
-    padding: 14px 16px;
+    padding: 12px 14px;
     font-weight: 600;
     background: var(--surface);
-    border-bottom: 1px solid transparent;
     user-select: none;
 }
 
-details[open] summary {
-    border-bottom: 1px solid var(--border);
+summary:hover {
+    background: light-dark(#eceef0, #26272b);
+}
+
+summary + .details-body {
+    border-top: 1px solid var(--border);
 }
 
 .details-body {
-    padding: 16px;
+    padding: 14px 16px;
 }
 
 /* Forms ------------------------------------------------------------------ */
 
-form > * + * {
-    /* Forms get generous, consistent spacing between children. */
-    margin-top: 8px;
-}
-
 label {
     display: block;
     font-weight: 600;
-    margin: 4px 0;
+    margin: 6px 0 4px;
 }
 
 input[type="text"],
@@ -174,21 +161,20 @@ input[type="datetime-local"],
 select,
 textarea {
     width: 100%;
-    padding: var(--input-pad);
+    padding: 8px 10px;
     font-size: 16px;
     color: var(--fg);
-    background: var(--surface);
+    background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin: 6px 0 18px;
+    border-radius: 4px;
+    margin: 4px 0 16px;
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--focus);
     outline-offset: 1px;
-    border-color: transparent;
 }
 
 textarea {
@@ -199,53 +185,55 @@ textarea {
 input[type="checkbox"] {
     width: auto;
     margin: 0;
-    accent-color: var(--accent);
+    accent-color: var(--focus);
 }
 
 input[type="hidden"] {
     display: none;
 }
 
-/* Buttons ---------------------------------------------------------------- */
+select {
+    background-color: var(--bg);
+}
+
+/* Buttons (plain, no colour fills) --------------------------------------- */
 
 button,
 .mod-btn {
     display: inline-block;
-    padding: 11px 18px;
+    padding: 9px 16px;
     font-size: 16px;
     line-height: 1.2;
-    font-weight: 600;
-    border-radius: var(--radius);
     cursor: pointer;
-    border: 1px solid transparent;
-    background: var(--accent);
-    color: var(--accent-text);
+    border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--fg);
 }
 
 button:hover,
 .mod-btn:hover {
-    filter: brightness(1.06);
+    background: light-dark(#eceef0, #26272b);
 }
 
 button:disabled,
 .mod-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
-    filter: none;
 }
 
 button.danger {
-    background: transparent;
     color: var(--danger);
-    border-color: var(--danger);
+    background: transparent;
+    border: 1px solid var(--border);
 }
 
 button.ghost,
 .mod-btn.ghost,
 a.mod-btn {
     background: transparent;
-    color: var(--ghost-text);
-    border-color: var(--border);
+    border: 1px solid var(--border);
+    color: var(--fg);
 }
 
 a.mod-btn {
@@ -256,9 +244,8 @@ a.mod-btn {
 
 .secmodule {
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    margin: 16px 0;
+    padding: 12px 14px;
+    margin: 14px 0;
 }
 
 .secmodule.greyed {
@@ -287,26 +274,24 @@ a.mod-btn {
 }
 
 .secmod-body {
-    margin-top: 12px;
+    margin-top: 10px;
 }
 
 /* QR / manual code ------------------------------------------------------- */
 
 .qr-wrap {
     text-align: center;
-    margin: 18px 0;
-    padding: 18px;
+    margin: 16px 0;
+    padding: 16px;
     background: var(--code-bg);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
 }
 
 .qr-img {
     max-width: 240px;
     height: auto;
-    padding: 10px;
+    padding: 8px;
     background: #fff;
-    border-radius: 6px;
     display: inline-block;
 }
 
@@ -315,9 +300,8 @@ a.mod-btn {
     background: var(--code-bg);
     color: var(--fg);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px;
-    margin: 8px 0 18px;
+    padding: 10px 12px;
+    margin: 6px 0 16px;
     word-break: break-all;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -332,8 +316,8 @@ a.mod-btn {
 }
 
 footer {
-    margin-top: 40px;
-    padding-top: 16px;
+    margin-top: 36px;
+    padding-top: 14px;
     border-top: 1px solid var(--border);
     color: var(--muted);
     font-size: 0.88em;
@@ -341,11 +325,11 @@ footer {
 }
 
 footer a {
-    color: var(--ghost-text);
+    color: var(--focus);
 }
 
 hr {
     border: 0;
     border-top: 1px solid var(--border);
-    margin: 28px 0;
+    margin: 24px 0;
 }
