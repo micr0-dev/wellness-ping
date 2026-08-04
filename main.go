@@ -670,7 +670,7 @@ func testPingHandler(w http.ResponseWriter, r *http.Request) {
 
 	sendPing(user, 0)
 
-	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Test Ping Sent!</h1><p>Check your email at %s</p><p><a href='/settings'>Back to settings</a></p></body></html>", user.Email)
+	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Test Ping Sent!</h1><p>Test message sent to %s</p><p><a href='/settings'>Back to settings</a></p></body></html>", user.Email)
 }
 
 // ---------------------------------------------------------------------------
@@ -1740,7 +1740,9 @@ func resolveSignalUUID(contact string) (string, bool) {
 	var args []string
 	args = append(args, "-a", signal.Account, "--output=json", "getUserStatus")
 	if kind == "signal" {
-		args = append(args, "--username", "u:"+canon)
+		// getUserStatus --username takes the bare username, NOT the u: prefix
+		// (u: is only valid as a positional recipient to send).
+		args = append(args, "--username", canon)
 	} else if kind == "phone" {
 		args = append(args, canon)
 	} else {
@@ -1749,7 +1751,11 @@ func resolveSignalUUID(contact string) (string, bool) {
 
 	out, err := exec.CommandContext(ctx, signal.Binary, args...).CombinedOutput()
 	if err != nil {
-		log.Printf("signal-cli getUserStatus failed: %v: %s", err, strings.TrimSpace(string(out)))
+		detail := strings.TrimSpace(string(out))
+		if i := strings.IndexByte(detail, '\n'); i > 0 {
+			detail = detail[:i]
+		}
+		log.Printf("signal-cli getUserStatus failed: %v: %s", err, detail)
 		return "", false
 	}
 
