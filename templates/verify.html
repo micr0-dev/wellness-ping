@@ -10,6 +10,15 @@
         <h1>Verify Your Contact</h1>
         <p>We sent an 8-digit code to {{.Email}}</p>
 
+        {{if .ViaSignal}}
+        <div class="raised">
+            <p><strong>Check your Signal.</strong></p>
+            <p>The code was sent from the official Wellness Ping Signal account
+            (username: <code>wellness_ping.01</code>). If the sender's Signal
+            username does not match this, do NOT enter the code and contact us.</p>
+        </div>
+        {{end}}
+
         <form action="/verify-code" method="POST">
             <input type="hidden" name="identifier" value="{{.Email}}" />
             <label>Verification Code:</label><br />

@@ -36,7 +36,8 @@
         {{end}}
 
         <label>Alert Contacts (comma-separated email / Signal username / phone):</label><br>
-        <input type="text" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br><br>
+        <input type="text" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br>
+        <small style="color: #666;">Phone numbers and Signal usernames are messaged through each contact's Signal account - not SMS.</small><br><br>
 
         <label>Ping Frequency:</label><br>
         <select name="ping_frequency">

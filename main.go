@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -293,14 +294,18 @@ func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	subject := "Wellness Ping Verification Code"
 	body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
+
+	viaSignal := false
 	if kind == "email" {
 		sendEmail(canonical, subject, body)
 	} else {
-		// Send the code over Signal for a phone number or Signal username.
-		sendToContact(nil, canonical, subject, body)
+		// Send the code over Signal for a phone number or Signal username, as a
+		// 10-minute disappearing message.
+		viaSignal = true
+		sendVerificationCodeSignal(canonical, code)
 	}
 
-	data := map[string]string{"Email": canonical}
+	data := map[string]interface{}{"Email": canonical, "ViaSignal": viaSignal}
 	tmpl := template.Must(template.ParseFiles("templates/verify.html"))
 	tmpl.Execute(w, data)
 }
@@ -1714,6 +1719,88 @@ func signalSendRaw(recArg, body string) error {
 	return nil
 }
 
+// setSignalExpiration sets the disappearing-message timer for a 1:1 chat
+// (updateContact --expiration takes seconds; 0 disables it).
+func setSignalExpiration(recipient string, seconds int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "updateContact", recipient, "--expiration", strconv.Itoa(seconds)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("updateContact --expiration failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// signalExpiration reads the current disappearing-message timer (seconds) for
+// a 1:1 chat, if signal-cli exposes it. Returns ok=false if unknown.
+func signalExpiration(recipient string) (int, bool) {
+	if !signal.Ready {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "--output=json", "listContacts", "--detailed", recipient).Output()
+	if err != nil {
+		return 0, false
+	}
+	var list []map[string]interface{}
+	if json.Unmarshal(out, &list) != nil {
+		return 0, false
+	}
+	for _, c := range list {
+		for _, key := range []string{"expiration", "expirationTimer", "disappearingMessages"} {
+			if v, ok := c[key]; ok {
+				switch t := v.(type) {
+				case float64:
+					return int(t), true
+				case json.Number:
+					n, err := t.Int64()
+					if err == nil {
+						return int(n), true
+					}
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+// sendVerificationCodeSignal sends the code over Signal with a 10-minute
+// disappearing-message timer: it remembers the chat's current timer, sets it
+// to 600s, sends, then restores the previous value.
+func sendVerificationCodeSignal(contact, code string) bool {
+	if !signal.Ready {
+		log.Printf("WARNING: cannot send verification code to %s: Signal not ready", contact)
+		return false
+	}
+
+	uuid := ""
+	if u, ok := resolveSignalUUID(contact); ok {
+		uuid = u
+	}
+	recArg := signalSendTarget(contact, uuid)
+
+	prev, ok := signalExpiration(recArg)
+	if err := setSignalExpiration(recArg, 600); err != nil {
+		log.Printf("WARNING: could not set 10-min timer for %s: %v", contact, err)
+	}
+
+	err := signalSendRaw(recArg, fmt.Sprintf("Your Wellness Ping Verification Code is: %s\n\nThis code expires in 10 minutes.", code))
+	if err != nil {
+		log.Printf("WARNING: could not send verification code to %s via Signal: %v", contact, err)
+	}
+
+	// Keep whatever timer the user had before.
+	if ok {
+		if err := setSignalExpiration(recArg, prev); err != nil {
+			log.Printf("WARNING: could not restore timer for %s: %v", contact, err)
+		}
+	} else {
+		log.Printf("note: could not read prior disappearing-timer for %s; leaving it at 10 minutes", contact)
+	}
+	return err == nil
+}
+
 // signalSendTarget turns a contact into the recipient argument signal-cli
 // expects: u:<username>, the E.164, or a bare ACI UUID.
 func signalSendTarget(contact, uuid string) string {
@@ -1774,25 +1861,6 @@ func resolveSignalUUID(contact string) (string, bool) {
 	return "", false
 }
 
-// firstContact tracks which Signal recipients we have already messaged, so the
-// "confirm it matches" notice is only sent once per contact.
-var firstContact = struct {
-	sync.Mutex
-	m map[string]bool
-}{m: map[string]bool{}}
-
-// signalFirstContactNotice returns a verification notice the first time we
-// message a given Signal recipient, or "" for established contacts.
-func signalFirstContactNotice(to string) string {
-	firstContact.Lock()
-	defer firstContact.Unlock()
-	if firstContact.m[to] {
-		return ""
-	}
-	firstContact.m[to] = true
-	return fmt.Sprintf("This message is from the official Wellness Ping Signal account (username: %s).\n\nIf this account does not match the one you expected, do NOT share any personal or location details, and let us know. Please confirm this matches before sharing anything sensitive.\n\n---\n\n", OfficialSignalUsername)
-}
-
 // sendToContact dispatches a notification to a single contact by its best
 // channel: email for email addresses, Signal for usernames/phone numbers.
 // The contact's ACI UUID is resolved and cached on first use so a later
@@ -1805,7 +1873,6 @@ func sendToContact(user *User, contact, subject, body string) {
 	}
 
 	msg := subject + "\n\n" + body
-	msg = signalFirstContactNotice(contact) + msg
 
 	// Prefer a cached UUID if we already resolved one.
 	uuid := ""
