@@ -1614,20 +1614,29 @@ func detectSignal() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	// --output is a global flag and must precede the command.
-	out, err := exec.CommandContext(ctx, bin, "--output=json", "listAccounts").Output()
+	out, err := exec.CommandContext(ctx, bin, "--output=json", "listAccounts").CombinedOutput()
 	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			log.Printf("signal-cli listAccounts output: %s", detail)
+		}
 		if ctx.Err() == context.DeadlineExceeded {
-			signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts timed out after 60s and was killed - is signal-cli responsive? Signal NOT working; falling back to email", bin)
+			signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts timed out after 60s and was killed. Output: %s - is signal-cli responsive / is another instance holding its config? Signal NOT working; falling back to email", bin, detail)
 		} else {
-			signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts failed: %v - Signal NOT working; falling back to email", bin, err)
+			signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts failed: %v. Output: %s - Signal NOT working; falling back to email", bin, err, detail)
 		}
 		log.Printf("WARNING: %s", signal.Message)
 		return
 	}
 
 	if strings.TrimSpace(string(out)) == "" || !strings.Contains(string(out), signal.Account) {
-		// No accounts, or the configured account isn't among them.
-		signal.Message = fmt.Sprintf("signal-cli found (%s) but account %s is not registered (listAccounts). Signal NOT working; falling back to email", bin, signal.Account)
+		// No accounts, or the configured account isn't among them. Show what IS
+		// registered so a mismatch (e.g. typo in SIGNAL_ACCOUNT) is obvious.
+		registered := strings.TrimSpace(string(out))
+		if registered == "" {
+			registered = "(none)"
+		}
+		signal.Message = fmt.Sprintf("signal-cli found (%s) but SIGNAL_ACCOUNT=%s is not among registered accounts: %s. Signal NOT working; falling back to email", bin, signal.Account, registered)
 		log.Printf("WARNING: %s", signal.Message)
 		return
 	}
@@ -1717,8 +1726,9 @@ func resolveSignalUUID(contact string) (string, bool) {
 		return "", false
 	}
 
-	out, err := exec.CommandContext(ctx, signal.Binary, args...).Output()
+	out, err := exec.CommandContext(ctx, signal.Binary, args...).CombinedOutput()
 	if err != nil {
+		log.Printf("signal-cli getUserStatus failed: %v: %s", err, strings.TrimSpace(string(out)))
 		return "", false
 	}
 
