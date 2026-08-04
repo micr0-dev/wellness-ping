@@ -62,6 +62,7 @@ type User struct {
 	AlertMessage      string           `json:"alert_message,omitempty"`
 	AllClearMessage   string           `json:"all_clear_message,omitempty"`
 	SecurityModules   []SecurityModule `json:"security_modules"`
+	SignalUUIDs       map[string]string `json:"signal_uuids,omitempty"` // canonical contact -> resolved ACI UUID
 }
 
 type PendingVerification struct {
@@ -1400,7 +1401,7 @@ func sendAlert(user *User) {
 	}
 
 	for _, alertContact := range user.AlertEmails {
-		sendToContact(alertContact, subject, body)
+		sendToContact(user, alertContact, subject, body)
 	}
 }
 
@@ -1412,7 +1413,7 @@ func sendAllClearEmail(user *User) {
 	}
 
 	for _, alertContact := range user.AlertEmails {
-		sendToContact(alertContact, subject, body)
+		sendToContact(user, alertContact, subject, body)
 	}
 }
 
@@ -1612,15 +1613,16 @@ func detectSignal() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "listAccounts", "--output=json").Output()
+	// --output is a global flag and must precede the command.
+	out, err := exec.CommandContext(ctx, bin, "--output=json", "listAccounts").Output()
 	if err != nil {
 		signal.Message = fmt.Sprintf("signal-cli found (%s) but listAccounts failed: %v - Signal NOT working; falling back to email", bin, err)
 		log.Printf("WARNING: %s", signal.Message)
 		return
 	}
 
-	if !strings.Contains(string(out), signal.Account) && strings.Contains(signal.Account, "+") {
-		// Account not found among registered accounts.
+	if strings.TrimSpace(string(out)) == "" || !strings.Contains(string(out), signal.Account) {
+		// No accounts, or the configured account isn't among them.
 		signal.Message = fmt.Sprintf("signal-cli found (%s) but account %s is not registered (listAccounts). Signal NOT working; falling back to email", bin, signal.Account)
 		log.Printf("WARNING: %s", signal.Message)
 		return
@@ -1661,23 +1663,12 @@ func classifyContact(raw string) (kind, canonical string) {
 	return "phone", "+1" + digits
 }
 
-// signalSend runs signal-cli to deliver a message to a Signal contact
-// (username with u: prefix, or an E.164 phone number).
-func signalSend(to string, body string) error {
+// signalSendRaw delivers a message to a direct recipient argument: a Signal
+// username (u:...), an E.164 phone number, or a resolved ACI UUID.
+func signalSendRaw(recArg, body string) error {
 	if !signal.Ready {
 		return fmt.Errorf("Signal is not ready")
 	}
-	kind, canon := classifyContact(to)
-	var recArg string
-	switch kind {
-	case "signal":
-		recArg = "u:" + canon
-	case "phone":
-		recArg = canon
-	default:
-		return fmt.Errorf("cannot send Signal to %q", to)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "send", "--message-from-stdin", recArg)
@@ -1687,6 +1678,59 @@ func signalSend(to string, body string) error {
 		return fmt.Errorf("signal-cli send failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// signalSendTarget turns a contact into the recipient argument signal-cli
+// expects: u:<username>, the E.164, or a bare ACI UUID.
+func signalSendTarget(contact, uuid string) string {
+	kind, canon := classifyContact(contact)
+	if uuid != "" {
+		return uuid
+	}
+	if kind == "signal" {
+		return "u:" + canon
+	}
+	return canon
+}
+
+// resolveSignalUUID asks signal-cli for the ACI UUID backing a username or
+// phone number, so future sends keep working even if the username changes.
+func resolveSignalUUID(contact string) (string, bool) {
+	if !signal.Ready {
+		return "", false
+	}
+	kind, canon := classifyContact(contact)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	var args []string
+	args = append(args, "-a", signal.Account, "--output=json", "getUserStatus")
+	if kind == "signal" {
+		args = append(args, "--username", "u:"+canon)
+	} else if kind == "phone" {
+		args = append(args, canon)
+	} else {
+		return "", false
+	}
+
+	out, err := exec.CommandContext(ctx, signal.Binary, args...).Output()
+	if err != nil {
+		return "", false
+	}
+
+	var list []struct {
+		UUID       string `json:"uuid"`
+		Registered bool   `json:"isRegistered"`
+	}
+	if json.Unmarshal(out, &list) != nil {
+		return "", false
+	}
+	for _, u := range list {
+		if u.UUID != "" && u.Registered {
+			return u.UUID, true
+		}
+	}
+	return "", false
 }
 
 // firstContact tracks which Signal recipients we have already messaged, so the
@@ -1708,28 +1752,40 @@ func signalFirstContactNotice(to string) string {
 	return fmt.Sprintf("This message is from the official Wellness Ping Signal account (username: %s).\n\nIf this account does not match the one you expected, do NOT share any personal or location details, and let us know. Please confirm this matches before sharing anything sensitive.\n\n---\n\n", OfficialSignalUsername)
 }
 
-// sendSignalTo sends a Signal message, prepending the first-contact notice once.
-func sendSignalTo(to, body string) error {
-	notice := signalFirstContactNotice(to)
-	if notice != "" {
-		body = notice + body
-	}
-	return signalSend(to, body)
-}
-
 // sendToContact dispatches a notification to a single contact by its best
 // channel: email for email addresses, Signal for usernames/phone numbers.
-func sendToContact(contact, subject, body string) {
+// The contact's ACI UUID is resolved and cached on first use so a later
+// username change doesn't break delivery.
+func sendToContact(user *User, contact, subject, body string) {
 	kind, _ := classifyContact(contact)
-	switch kind {
-	case "email":
+	if kind != "signal" && kind != "phone" {
 		sendEmail(contact, subject, body)
-	case "signal", "phone":
-		if err := sendSignalTo(contact, subject+"\n\n"+body); err != nil {
-			log.Printf("WARNING: could not alert %s via Signal: %v", contact, err)
+		return
+	}
+
+	msg := subject + "\n\n" + body
+	msg = signalFirstContactNotice(contact) + msg
+
+	// Prefer a cached UUID if we already resolved one.
+	uuid := ""
+	if user != nil && user.SignalUUIDs != nil {
+		uuid = user.SignalUUIDs[contact]
+	}
+	if uuid == "" {
+		if u, ok := resolveSignalUUID(contact); ok {
+			uuid = u
+			if user != nil {
+				if user.SignalUUIDs == nil {
+					user.SignalUUIDs = map[string]string{}
+				}
+				user.SignalUUIDs[contact] = u
+				saveStore()
+			}
 		}
-	default:
-		sendEmail(contact, subject, body)
+	}
+
+	if err := signalSendRaw(signalSendTarget(contact, uuid), msg); err != nil {
+		log.Printf("WARNING: could not alert %s via Signal: %v", contact, err)
 	}
 }
 
