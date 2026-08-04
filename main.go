@@ -33,7 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const VERSION = "2.0.1"
+const VERSION = "2.0.2"
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -217,6 +217,11 @@ func hashSecret(secret string) string {
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key))
 }
+
+// decoyHash is a throwaway argon2id hash used to keep the PIN check doing the
+// same amount of work whether or not a duress PIN is configured. Computed once
+// at startup from a random secret; it can never match anything.
+var decoyHash = hashSecret(generateToken())
 
 // verifySecret checks a candidate against a stored value in constant time.
 func verifySecret(stored, candidate string) bool {
@@ -1625,34 +1630,48 @@ func handlePINStep(w http.ResponseWriter, r *http.Request, email string, flow *C
 		return
 	}
 
-	// Duress first: this must never be reported as a failure, and must be
-	// indistinguishable from a real check-in to anyone watching the screen.
-	if cfg.Duress != "" {
-		if ok, upgraded := verifySecretUpgrade(cfg.Duress, pin); ok {
-			log.Printf("DURESS: duress PIN accepted for %s", email)
-			checkInFlows.Lock()
-			flow.Duress = true
-			checkInFlows.Unlock()
-			if upgraded != "" {
-				go upgradePINHash(email, "", upgraded)
-			}
-			// Fall through to exactly the same success path: mark the step
-			// complete and redirect. Anyone watching sees the ordinary
-			// sequence of pages, with no extra or missing step.
-			pinLimiter.reset("pin:" + email)
-			markFlowCompleted(flow, "pin")
-			http.Redirect(w, r, actionURL, http.StatusSeeOther)
-			return
+	// Both comparisons are ALWAYS evaluated, in the same order, before
+	// anything branches.
+	//
+	// Short-circuiting here is a real information leak: the duress PIN matches
+	// on the first comparison and returns, while a correct normal PIN has to
+	// fail the duress comparison first and then pass its own. That is two
+	// argon2 invocations against one, roughly a 2x difference in response
+	// time, which is enough to tell the two apart from outside. When the
+	// safety property is "nobody can tell you entered the duress PIN", the
+	// timing has to match as well as the pages do.
+	duressStored := cfg.Duress
+	if duressStored == "" {
+		duressStored = decoyHash // pay the same cost when no duress PIN is set
+	}
+	duressOK, duressUpgraded := verifySecretUpgrade(duressStored, pin)
+	duressOK = duressOK && cfg.Duress != ""
+
+	pinOK, pinUpgraded := verifySecretUpgrade(cfg.Pin, pin)
+	pinOK = pinOK && cfg.Pin != ""
+
+	if duressOK {
+		log.Printf("DURESS: duress PIN accepted for %s", email)
+		checkInFlows.Lock()
+		flow.Duress = true
+		checkInFlows.Unlock()
+		if duressUpgraded != "" {
+			go upgradePINHash(email, "", duressUpgraded)
 		}
+		// Exactly the same success path from here on.
+		pinLimiter.reset("pin:" + email)
+		markFlowCompleted(flow, "pin")
+		http.Redirect(w, r, actionURL, http.StatusSeeOther)
+		return
 	}
 
-	ok, upgraded := verifySecretUpgrade(cfg.Pin, pin)
-	if cfg.Pin == "" || !ok {
+	if !pinOK {
 		http.Error(w, "Invalid PIN", http.StatusUnauthorized)
 		return
 	}
-	if upgraded != "" {
-		upgradePINHash(email, upgraded, "")
+	if pinUpgraded != "" {
+		// Asynchronous to match the duress branch above.
+		go upgradePINHash(email, pinUpgraded, "")
 	}
 
 	pinLimiter.reset("pin:" + email)
@@ -1765,9 +1784,10 @@ func triggerDuress(email string) {
 	}
 	store.mu.Unlock()
 
-	// Persist and alert off the request path so the duress response takes no
-	// longer than an ordinary confirmation.
-	go saveStore()
+	// Persist synchronously, exactly as completeCheckIn does, so the two
+	// confirmations take the same time. Only the alert itself is dispatched in
+	// the background, since that can take a minute over signal-cli.
+	saveStore()
 	go sendAlert(snap)
 }
 
