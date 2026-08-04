@@ -27,7 +27,7 @@
 
         {{if .User}}
         <h3>Current Settings</h3>
-        <p><b>Email:</b> {{.User.Email}}</p>
+        <p><b>Identifier:</b> {{.User.Email}}</p>
         <p><b>Alert Contacts:</b> {{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}</p>
         <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
         <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
@@ -173,7 +173,7 @@
         Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or irc.micr0.dev:6667/6697 |
         Version: {{.Version}}
         <br>
-        Privacy: We only store your email, alert contacts, and last check-in time. No logs, no tracking.
+        Privacy: We only store your contact identifier, alert contacts, and last check-in time. No logs, no tracking.
         Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.
     </footer>
 

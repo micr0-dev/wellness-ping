@@ -269,23 +269,38 @@ func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	// The identifier may be an email, a phone number (default +1), or a Signal
+	// username. Normalize it; the same canonical form is used as the account key.
+	raw := strings.TrimSpace(r.FormValue("identifier"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.FormValue("email")) // backwards-compatible
+	}
+	kind, canonical := classifyContact(raw)
+	if canonical == "" {
+		http.Error(w, "Enter a valid email, phone number, or Signal username", http.StatusBadRequest)
+		return
+	}
 
 	code := generateCode()
 
 	store.mu.Lock()
-	store.PendingVerifications[email] = &PendingVerification{
-		Email:     email,
+	store.PendingVerifications[canonical] = &PendingVerification{
+		Email:     canonical,
 		Code:      code,
 		ExpiresAt: time.Now().Add(10 * time.Minute),
 	}
 	store.mu.Unlock()
 
 	subject := "Wellness Ping Verification Code"
-	body := fmt.Sprintf("Your verification code is: %s\n\nThis code expires in 10 minutes.", code)
-	sendEmail(email, subject, body)
+	body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
+	if kind == "email" {
+		sendEmail(canonical, subject, body)
+	} else {
+		// Send the code over Signal for a phone number or Signal username.
+		sendToContact(nil, canonical, subject, body)
+	}
 
-	data := map[string]string{"Email": email}
+	data := map[string]string{"Email": canonical}
 	tmpl := template.Must(template.ParseFiles("templates/verify.html"))
 	tmpl.Execute(w, data)
 }
@@ -296,21 +311,25 @@ func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	raw := strings.TrimSpace(r.FormValue("identifier"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.FormValue("email")) // backwards-compatible
+	}
+	_, canonical := classifyContact(raw)
 	code := strings.TrimSpace(r.FormValue("code"))
 
 	store.mu.Lock()
-	pending, exists := store.PendingVerifications[email]
+	pending, exists := store.PendingVerifications[canonical]
 	store.mu.Unlock()
 
 	if !exists {
-		http.Error(w, "No verification pending for this email", http.StatusBadRequest)
+		http.Error(w, "No verification pending for this contact", http.StatusBadRequest)
 		return
 	}
 
 	if time.Now().After(pending.ExpiresAt) {
 		store.mu.Lock()
-		delete(store.PendingVerifications, email)
+		delete(store.PendingVerifications, canonical)
 		store.mu.Unlock()
 		http.Error(w, "Code expired", http.StatusBadRequest)
 		return
@@ -322,18 +341,18 @@ func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	store.mu.Lock()
-	delete(store.PendingVerifications, email)
+	delete(store.PendingVerifications, canonical)
 	store.mu.Unlock()
 
-	// If the user has any security modules enabled, the email code is only the
+	// If the user has any security modules enabled, this code is only the
 	// first factor - they must complete each enabled module before a settings
 	// session is granted.
 	store.mu.RLock()
-	user := store.Users[email]
+	user := store.Users[canonical]
 	store.mu.RUnlock()
 	if user != nil && len(enabledModules(user)) > 0 {
 		loginToken := generateToken()
-		getFlow(loginToken, email, "login")
+		getFlow(loginToken, canonical, "login")
 		http.Redirect(w, r, "/login?token="+url.QueryEscape(loginToken), http.StatusSeeOther)
 		return
 	}
@@ -341,11 +360,11 @@ func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
 	sessionToken := generateToken()
 	store.mu.Lock()
 	store.Sessions[sessionToken] = &Session{
-		Email:     email,
+		Email:     canonical,
 		Token:     sessionToken,
 		ExpiresAt: time.Now().Add(30 * time.Minute),
 	}
-	delete(store.PendingVerifications, email)
+	delete(store.PendingVerifications, canonical)
 	store.mu.Unlock()
 	saveStore()
 
@@ -1367,10 +1386,12 @@ func sendPing(user *User, reminderNum int) {
 	subject := "Wellness Ping"
 	body := ""
 
-	// Reply-PONG only works when no security modules are enabled; otherwise it
-	// would bypass PIN/TOTP/passkey.
+	// Reply-PONG only applies to email, when no security modules are enabled
+	// (it would otherwise bypass PIN/TOTP/passkey). Signal users confirm by
+	// tapping the link instead.
+	kind, _ := classifyContact(user.Email)
 	replyHint := "\n\nOr reply PONG to this email."
-	if len(enabledModules(user)) > 0 {
+	if len(enabledModules(user)) > 0 || kind != "email" {
 		replyHint = ""
 	}
 
@@ -1390,7 +1411,7 @@ func sendPing(user *User, reminderNum int) {
 		subject = "Wellness Ping - Reminder"
 	}
 
-	sendEmail(user.Email, subject, body)
+	sendToContact(user, user.Email, subject, body)
 }
 
 func sendAlert(user *User) {
