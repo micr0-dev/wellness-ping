@@ -220,8 +220,16 @@ select {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 12px;
-    margin-top: 4px;
+    gap: 10px;
+    margin: 4px 0 8px;
+}
+
+.btn-row button {
+    white-space: nowrap;
+}
+
+.back-link {
+    margin: 28px 0 0;
 }
 
 /* Spacing between stacked form widgets */

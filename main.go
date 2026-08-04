@@ -462,6 +462,19 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if action == "test_ping" {
+		store.mu.RLock()
+		u := store.Users[email]
+		store.mu.RUnlock()
+		if u == nil {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		sendPing(u, 0)
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
+
 	alertEmailsStr := r.FormValue("alert_emails")
 	if strings.TrimSpace(alertEmailsStr) == "" {
 		http.Error(w, "Alert emails are required", http.StatusBadRequest)

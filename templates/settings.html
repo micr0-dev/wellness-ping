@@ -155,20 +155,16 @@
             </div>
         </details>
 
-        <button type="submit" name="action" value="save">Save Settings</button>
-
-        {{if .User}}
-        <button type="submit" class="danger" name="action" value="stop">Stop Service &amp; Delete All Data</button>
-        {{end}}
+        <div class="btn-row">
+            <button type="submit" name="action" value="save">Save Settings</button>
+            {{if .User}}
+            <button type="submit" name="action" value="test_ping">Send Test Ping Now</button>
+            <button type="submit" class="danger" name="action" value="stop">Stop Service &amp; Delete All Data</button>
+            {{end}}
+        </div>
     </form>
 
-    {{if .User}}
-    <form action="/test-ping" method="POST">
-        <button type="submit">Send Test Ping Now</button>
-    </form>
-    {{end}}
-
-    <p><a href="/">Back to home</a></p>
+    <p class="back-link"><a href="/">Back to home</a></p>
 
     <footer>
         Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
