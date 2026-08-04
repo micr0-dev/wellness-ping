@@ -33,7 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const VERSION = "2.0.2"
+const VERSION = "2.0.3"
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -143,6 +143,8 @@ var (
 	pongLimiter = newRateLimiter()
 	// Inbound reply-PONG processing, keyed by claimed sender.
 	inboundLimiter = newRateLimiter()
+	// Signal signup "I've sent the DM" clicks, keyed by source address.
+	dmLimiter = newRateLimiter()
 )
 
 const (
@@ -156,6 +158,11 @@ const (
 	pongWindow       = time.Hour
 	inboundLimit     = 20
 	inboundWindow    = time.Hour
+	dmContinueLimit  = 20
+	dmContinueWindow = 15 * time.Minute
+	signupTTL        = 30 * time.Minute
+	sendRetryDelay   = 60 * time.Second
+	dmSeenTTL        = time.Hour
 	flowTTL          = 15 * time.Minute
 	sessionTTL       = 30 * time.Minute
 	pendingCodeTTL   = 10 * time.Minute
@@ -361,6 +368,21 @@ func clearSessionCookie(w http.ResponseWriter) {
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
+// renderTemplate parses and renders a template, reporting failures instead of
+// panicking. template.Must on a live request path turns a missing or malformed
+// template file into a panic.
+func renderTemplate(w http.ResponseWriter, file string, data interface{}) {
+	tmpl, err := template.ParseFiles(file)
+	if err != nil {
+		log.Printf("ERROR: could not parse %s: %v", file, err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+	if err := tmpl.Execute(w, data); err != nil {
+		log.Printf("ERROR: could not render %s: %v", file, err)
+	}
+}
+
 // renderPage renders a simple message page. Everything user-influenced goes
 // through html/template rather than fmt.Fprintf, so an address containing
 // markup cannot be reflected into the response.
@@ -446,6 +468,28 @@ type PendingVerification struct {
 	Code      string    `json:"code"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+// PendingSignup tracks a new Signal-identifier signup that has not yet had
+// its first contact with our bot acknowledged. This only applies to signup
+// (a brand-new account), not to login.
+type PendingSignup struct {
+	Canonical string
+	Kind      string // "signal" or "phone"
+	Code      string
+	// UUID is resolved once, when the signup is staged, so that confirming the
+	// DM later needs no signal-cli call at all.
+	UUID      string
+	Sent      bool
+	SentAt    time.Time
+	CreatedAt time.Time
+}
+
+// pendingSignups holds in-progress Signal signups awaiting the user's first
+// DM to our bot. In-memory only (short-lived, non-persistent).
+var pendingSignups = struct {
+	sync.RWMutex
+	m map[string]*PendingSignup
+}{m: map[string]*PendingSignup{}}
 
 type Session struct {
 	Email     string    `json:"email"`
@@ -650,6 +694,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
 	mux.HandleFunc("/send-code", sendCodeHandler)
+	mux.HandleFunc("/dm-continue", dmContinueHandler)
 	mux.HandleFunc("/verify-code", verifyCodeHandler)
 	mux.HandleFunc("/settings", settingsHandler)
 	mux.HandleFunc("/update", updateHandler)
@@ -671,6 +716,7 @@ func main() {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	go pingScheduler()
+	go signalReceiveLoop()
 
 	addr := fmt.Sprintf(":%d", *port)
 	srv := &http.Server{
@@ -743,29 +789,82 @@ func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	code := generateCode()
 
-	store.mu.Lock()
-	store.PendingVerifications[canonical] = &PendingVerification{
-		Email:     canonical,
-		Code:      code,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	store.mu.Unlock()
-
-	subject := "Wellness Ping Verification Code"
-	body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
-
-	viaSignal := false
 	if kind == "email" {
+		// Email signup/login: send the code by email as before.
+		store.mu.Lock()
+		store.PendingVerifications[canonical] = &PendingVerification{
+			Email:     canonical,
+			Code:      code,
+			ExpiresAt: time.Now().Add(10 * time.Minute),
+		}
+		store.mu.Unlock()
+
+		subject := "Wellness Ping Verification Code"
+		body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
 		sendEmail(canonical, subject, body)
-	} else {
-		// Send the code over Signal for a phone number or Signal username.
-		viaSignal = true
-		sendVerificationCodeSignal(canonical, code)
+
+		renderTemplate(w, "templates/verify.html", map[string]interface{}{"Email": canonical, "ViaSignal": false})
+		return
 	}
 
-	data := map[string]interface{}{"Email": canonical, "ViaSignal": viaSignal}
-	tmpl := template.Must(template.ParseFiles("templates/verify.html"))
-	tmpl.Execute(w, data)
+	// Signal identifier (phone number or username).
+	store.mu.RLock()
+	_, existing := store.Users[canonical]
+	store.mu.RUnlock()
+
+	if existing {
+		// LOGIN: we've messaged this account before, so send the code directly
+		// (the conversation already exists - no new-contact throttle).
+		store.mu.Lock()
+		store.PendingVerifications[canonical] = &PendingVerification{
+			Email:     canonical,
+			Code:      code,
+			ExpiresAt: time.Now().Add(10 * time.Minute),
+		}
+		store.mu.Unlock()
+
+		// Off the request path: signal-cli invocations are serialised now, so a
+		// queued send must not hold an HTTP handler open.
+		go sendVerificationCodeSignal(canonical, code)
+
+		renderTemplate(w, "templates/verify.html", map[string]interface{}{"Email": canonical, "ViaSignal": true})
+		return
+	}
+
+	// SIGNUP via Signal: require the user to DM our bot first so that when we
+	// send the code we're replying to an established conversation, not burning
+	// a new-contact message (which Signal throttles hardest). We stage the code
+	// now and only ship it once we've seen their incoming DM.
+	// Check the identifier is actually on Signal before telling anyone to DM
+	// us. A number with no Signal account can never complete this flow, and
+	// sending it to a page that says "message our bot" is a dead end with no
+	// explanation. The resolved UUID is cached on the pending signup, so
+	// confirming the DM afterwards costs no signal-cli call at all.
+	uuid, registered, err := signalLookup(canonical)
+	if err != nil {
+		log.Printf("WARNING: Signal lookup failed for %s: %v", canonical, err)
+		renderDM(w, canonical, "We couldn't reach Signal just now. Give it a moment and try again.")
+		return
+	}
+	if !registered {
+		renderPage(w, http.StatusBadRequest, "Not on Signal",
+			canonical+" isn't registered with Signal, so we can't send your check-ins there. "+
+				"Sign up with an email address instead, or use a number that has Signal installed.",
+			map[string]string{"Go back": "/"})
+		return
+	}
+
+	pendingSignups.Lock()
+	pendingSignups.m[canonical] = &PendingSignup{
+		Canonical: canonical,
+		Kind:      kind,
+		Code:      code,
+		UUID:      uuid,
+		CreatedAt: time.Now(),
+	}
+	pendingSignups.Unlock()
+
+	renderDM(w, canonical, "")
 }
 
 func verifyCodeHandler(w http.ResponseWriter, r *http.Request) {
@@ -2753,8 +2852,13 @@ type signalState struct {
 
 var signal = signalState{}
 
-// signalUsernameRe matches a Signal username (base chars + .## discriminator).
-var signalUsernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,32}\.[0-9]{2}$`)
+// signalUsernameRe matches a valid Signal username per libsignal's rules:
+//
+//	nickname: 3-32 chars, not starting with a digit, chars [a-zA-Z0-9_]
+//	separator: '.'
+//	discriminator: 2-9 digits; 2-digit may not be 00; 3+ digits may not have
+//	              a leading zero (libsignal allows up to 9 digits).
+var signalUsernameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{2,31}\.(?:[1-9][0-9]{2,8}|[0-9][1-9]|[1-9][0-9])$`)
 
 // detectSignal locates signal-cli and confirms a registered account is present.
 // If it isn't found/set up we do NOT fail the process - we fall back to email
@@ -2892,11 +2996,7 @@ func signalSendRaw(recArg, body string) error {
 	if !signal.Ready {
 		return fmt.Errorf("Signal is not ready")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, signal.Binary, "-a", signal.Account, "send", "--message-from-stdin", recArg)
-	cmd.Stdin = strings.NewReader(body)
-	out, err := cmd.CombinedOutput()
+	out, err := runSignalCLI(60*time.Second, body, "send", "--message-from-stdin", recArg)
 	if err != nil {
 		return fmt.Errorf("signal-cli send failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -2939,34 +3039,66 @@ func signalSendTarget(contact, uuid string) string {
 
 // resolveSignalUUID asks signal-cli for the ACI UUID backing a username or
 // phone number, so future sends keep working even if the username changes.
-func resolveSignalUUID(contact string) (string, bool) {
+// signalMu serialises every signal-cli invocation.
+//
+// signal-cli takes an exclusive lock on its account config, so concurrent
+// invocations queue up regardless, each holding a live process while it waits.
+// On a small box that is the difference between one resident process and ten:
+// a fan-out alert to ten Signal contacts used to start ten of them at once.
+var signalMu sync.Mutex
+
+// runSignalCLI runs one signal-cli command, one at a time.
+func runSignalCLI(timeout time.Duration, stdin string, args ...string) ([]byte, error) {
+	if signal.Binary == "" || signal.Account == "" {
+		return nil, fmt.Errorf("Signal is not configured")
+	}
+
+	signalMu.Lock()
+	defer signalMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, signal.Binary, append([]string{"-a", signal.Account}, args...)...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	return cmd.CombinedOutput()
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i > 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// signalLookup reports whether a contact is registered on Signal and returns
+// its ACI UUID. It distinguishes "not on Signal" from "the lookup failed":
+// the first is a dead end worth telling the user about, the second is worth
+// retrying.
+func signalLookup(contact string) (uuid string, registered bool, err error) {
 	if !signal.Ready {
-		return "", false
+		return "", false, fmt.Errorf("Signal is not configured")
 	}
 	kind, canon := classifyContact(contact)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
 	var args []string
-	args = append(args, "-a", signal.Account, "--output=json", "getUserStatus")
-	if kind == "signal" {
+	switch kind {
+	case "signal":
 		// getUserStatus --username takes the bare username, NOT the u: prefix
 		// (u: is only valid as a positional recipient to send).
-		args = append(args, "--username", canon)
-	} else if kind == "phone" {
-		args = append(args, canon)
-	} else {
-		return "", false
+		args = []string{"--output=json", "getUserStatus", "--username", canon}
+	case "phone":
+		args = []string{"--output=json", "getUserStatus", canon}
+	default:
+		return "", false, fmt.Errorf("not a Signal contact")
 	}
 
-	out, err := exec.CommandContext(ctx, signal.Binary, args...).CombinedOutput()
+	out, err := runSignalCLI(45*time.Second, "", args...)
 	if err != nil {
-		detail := strings.TrimSpace(string(out))
-		if i := strings.IndexByte(detail, '\n'); i > 0 {
-			detail = detail[:i]
-		}
-		log.Printf("signal-cli getUserStatus failed: %v: %s", err, detail)
-		return "", false
+		return "", false, fmt.Errorf("%v: %s", err, firstLine(string(out)))
 	}
 
 	var list []struct {
@@ -2974,14 +3106,232 @@ func resolveSignalUUID(contact string) (string, bool) {
 		Registered bool   `json:"isRegistered"`
 	}
 	if json.Unmarshal(out, &list) != nil {
-		return "", false
+		return "", false, fmt.Errorf("could not parse getUserStatus output")
 	}
 	for _, u := range list {
-		if u.UUID != "" && u.Registered {
-			return u.UUID, true
+		if u.Registered {
+			return u.UUID, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
+}
+
+func resolveSignalUUID(contact string) (string, bool) {
+	uuid, registered, err := signalLookup(contact)
+	if err != nil {
+		log.Printf("signal-cli getUserStatus failed for %s: %v", contact, err)
+		return "", false
+	}
+	return uuid, registered && uuid != ""
+}
+
+// signalReceiveLine is one line of `signal-cli --output=json receive`.
+//
+// The sender fields live under "envelope"; reading them from the top level
+// yields empty strings for every message, so no incoming DM would ever match.
+// A couple of legacy top-level fields are accepted too, so a format change
+// degrades rather than breaks.
+type signalReceiveLine struct {
+	Envelope struct {
+		Source       string `json:"source"`
+		SourceNumber string `json:"sourceNumber"`
+		SourceUuid   string `json:"sourceUuid"`
+		SourceName   string `json:"sourceName"`
+		DataMessage  *struct {
+			Message string `json:"message"`
+		} `json:"dataMessage"`
+	} `json:"envelope"`
+	SourceNumber string `json:"sourceNumber"`
+	SourceUuid   string `json:"sourceUuid"`
+	Account      string `json:"account"`
+}
+
+// dmSeen records who has recently sent us a Signal message, keyed by
+// "num:<E.164>" or "uuid:<aci>".
+var dmSeen = struct {
+	sync.RWMutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
+func noteDM(key string) {
+	if key == "" {
+		return
+	}
+	dmSeen.Lock()
+	dmSeen.m[key] = time.Now()
+	dmSeen.Unlock()
+}
+
+func sawDM(key string) bool {
+	if key == "" {
+		return false
+	}
+	dmSeen.RLock()
+	t, ok := dmSeen.m[key]
+	dmSeen.RUnlock()
+	return ok && time.Since(t) < dmSeenTTL
+}
+
+func sweepDMSeen() {
+	dmSeen.Lock()
+	for k, t := range dmSeen.m {
+		if time.Since(t) > dmSeenTTL {
+			delete(dmSeen.m, k)
+		}
+	}
+	dmSeen.Unlock()
+}
+
+func sweepPendingSignups() {
+	pendingSignups.Lock()
+	for k, ps := range pendingSignups.m {
+		if time.Since(ps.CreatedAt) > signupTTL {
+			delete(pendingSignups.m, k)
+		}
+	}
+	pendingSignups.Unlock()
+}
+
+// signalReceiveLoop is the ONLY place that runs `signal-cli receive`.
+//
+// receive is destructive: it pulls messages off the server queue and
+// acknowledges them, after which they are gone. Running it from a request
+// handler meant two people signing up at the same moment drained each other's
+// messages, and whoever lost the race was told "we haven't seen your message"
+// forever, with nothing left on the server to find. One reader, recording
+// every sender it sees, removes the race: a DM that arrives before the user
+// clicks is still remembered when they do.
+//
+// It is also needed for its own sake. The Signal protocol expects a client to
+// receive regularly, both to drain the queue and to keep prekeys rotating.
+// Nothing was doing that at all.
+func signalReceiveLoop() {
+	for {
+		if !signal.Ready {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		out, err := runSignalCLI(45*time.Second, "", "--output=json", "receive", "--timeout", "5")
+		if err != nil {
+			log.Printf("WARNING: signal-cli receive failed: %v: %s", err, firstLine(string(out)))
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "{") {
+				continue
+			}
+			var rl signalReceiveLine
+			if json.Unmarshal([]byte(line), &rl) != nil {
+				continue
+			}
+			for _, num := range []string{rl.Envelope.SourceNumber, rl.Envelope.Source, rl.SourceNumber} {
+				if strings.HasPrefix(num, "+") {
+					noteDM("num:" + num)
+				}
+			}
+			for _, id := range []string{rl.Envelope.SourceUuid, rl.SourceUuid} {
+				if id != "" {
+					noteDM("uuid:" + id)
+				}
+			}
+		}
+
+		// Yield the signal-cli lock so queued sends get a turn.
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// claimSignupCode atomically claims the staged verification code for a signup
+// whose DM we have seen. Exactly one caller can claim within sendRetryDelay,
+// so hammering the button cannot fan out a pile of Signal sends. Returning a
+// status rather than un-claiming on failure keeps the decision in one place
+// and testable.
+func claimSignupCode(canonical string) (code string, status string) {
+	pendingSignups.Lock()
+	defer pendingSignups.Unlock()
+
+	ps := pendingSignups.m[canonical]
+	if ps == nil || time.Since(ps.CreatedAt) > signupTTL {
+		return "", "expired"
+	}
+	if ps.Sent && time.Since(ps.SentAt) < sendRetryDelay {
+		return "", "already-sent"
+	}
+	if !sawDM("num:"+canonical) && !(ps.UUID != "" && sawDM("uuid:"+ps.UUID)) {
+		return "", "no-dm"
+	}
+	ps.Sent = true
+	ps.SentAt = time.Now()
+	return ps.Code, "ok"
+}
+
+// dmContinueHandler is where a new Signal signup reports that they have
+// messaged our bot. It only reads the map the receive loop maintains, so it
+// starts no subprocess: previously every click spawned one (two, for a
+// username), unauthenticated, which was a straightforward way to exhaust the
+// memory on a small host.
+func dmContinueHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	if !dmLimiter.allow("dm:"+clientIP(r), dmContinueLimit, dmContinueWindow) {
+		http.Error(w, "Too many attempts. Please wait a moment and try again.", http.StatusTooManyRequests)
+		return
+	}
+
+	raw := strings.TrimSpace(r.FormValue("identifier"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.FormValue("email")) // backwards-compatible
+	}
+	kind, canonical := classifyContact(raw)
+	if kind == "" || canonical == "" {
+		http.Error(w, "Invalid identifier", http.StatusBadRequest)
+		return
+	}
+
+	code, status := claimSignupCode(canonical)
+	switch status {
+	case "expired":
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	case "no-dm":
+		renderDM(w, canonical, "We haven't seen your message yet. Make sure you sent it from "+
+			canonical+" to "+OfficialSignalUsername+", give it a few seconds, then try again.")
+		return
+	case "already-sent":
+		// A code went out moments ago. Show the entry page rather than
+		// sending another one.
+		renderTemplate(w, "templates/verify.html", map[string]interface{}{"Email": canonical, "ViaSignal": true})
+		return
+	}
+
+	store.mu.Lock()
+	store.PendingVerifications[canonical] = &PendingVerification{
+		Email:     canonical,
+		Code:      code,
+		ExpiresAt: time.Now().Add(pendingCodeTTL),
+	}
+	store.mu.Unlock()
+
+	// Sent in the background: signal-cli is serialised now, so a queued send
+	// must not hold this handler open.
+	go sendVerificationCodeSignal(canonical, code)
+
+	renderTemplate(w, "templates/verify.html", map[string]interface{}{"Email": canonical, "ViaSignal": true})
+}
+
+func renderDM(w http.ResponseWriter, canonical, notice string) {
+	renderTemplate(w, "templates/dm.html", map[string]interface{}{
+		"Email":   canonical,
+		"From":    OfficialSignalUsername,
+		"Version": VERSION,
+		"Notice":  notice,
+	})
 }
 
 // sendToContact dispatches a notification to a single contact by its best
@@ -3503,7 +3853,9 @@ func housekeeping(now time.Time) bool {
 
 	sweepFlows()
 	sweepTOTPCodes()
-	for _, rl := range []*rateLimiter{codeSendLimiter, codeVerifyLimiter, pinLimiter, totpLimiter, pongLimiter, inboundLimiter} {
+	sweepDMSeen()
+	sweepPendingSignups()
+	for _, rl := range []*rateLimiter{codeSendLimiter, codeVerifyLimiter, pinLimiter, totpLimiter, pongLimiter, inboundLimiter, dmLimiter} {
 		rl.sweep(codeSendWindow)
 	}
 
