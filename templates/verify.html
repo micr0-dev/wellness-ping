@@ -1,29 +1,29 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Verify - Wellness Ping</title>
-        <link rel="stylesheet" href="/static/style.css" />
-    </head>
-    <body>
-        <h1>Verify Your Contact</h1>
-        <p>We sent an 8-digit code to {{.Email}}</p>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Verify Your Contact</h1>
+    <p>We sent an 8-digit code to {{.Email}}</p>
 
-        {{if .ViaSignal}}
-        <div class="raised">
-            <p><strong>Check your Signal.</strong></p>
-            <p>The code was sent from the official Wellness Ping Signal account
+    {{if .ViaSignal}}
+    <div class="raised">
+        <p><strong>Check your Signal.</strong></p>
+        <p>The code was sent from the official Wellness Ping Signal account
             (username: <code>wellness_ping.01</code>). If the sender's Signal
             username does not match this, do NOT enter the code and contact us.</p>
-        </div>
-        {{end}}
+    </div>
+    {{end}}
 
-        <form action="/verify-code" method="POST">
-            <input type="hidden" name="identifier" value="{{.Email}}" />
-            <label>Verification Code:</label><br />
-            <input type="text" name="code" required /><br /><br />
-            <button type="submit">Verify</button>
-        </form>
-    </body>
+    <form action="/verify-code" method="POST">
+        <input type="hidden" name="identifier" value="{{.Email}}">
+        <label for="code">Verification Code</label>
+        <input type="text" id="code" name="code" autocomplete="one-time-code" required>
+        <button type="submit">Verify</button>
+    </form>
+</body>
 </html>

@@ -1,88 +1,269 @@
 :root {
     color-scheme: light dark;
+
+    /* Design tokens - tuned for good contrast in BOTH light and dark. */
+    --bg: light-dark(#ffffff, #0f1115);
+    --fg: light-dark(#181b20, #e6e8eb);
+    --muted: light-dark(#565c66, #a4abb8);
+    --surface: light-dark(#f4f5f7, #191d25);
+    --border: light-dark(#d3d8df, #3a414d);
+    --accent: light-dark(#0a5bd3, #6ea8ff);
+    --accent-text: light-dark(#ffffff, #0f1115);
+    --ghost-text: light-dark(#0a5bd3, #8ab4ff);
+    --danger: light-dark(#b3261e, #ff7a72);
+    --ok: light-dark(#1a7f37, #57cd78);
+    --code-bg: light-dark(#eef0f4, #14171d);
+
+    --radius: 8px;
+    --pad: 16px;
+    --input-pad: 10px 12px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
 }
 
 body {
-    font-family:
-        "Inter",
-        "Adwaita Sans",
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        Roboto,
-        Oxygen,
-        Ubuntu,
-        Cantarell,
-        "Open Sans",
-        "Helvetica Neue",
-        sans-serif;
-    max-width: 700px;
-    margin: 60px auto auto auto;
-    padding: 30px;
+    font-family: "Inter", "Adwaita Sans", system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell,
+        "Open Sans", "Helvetica Neue", sans-serif;
+    max-width: 660px;
+    margin: 48px auto;
+    padding: 8px 22px 56px;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.5;
 }
 
-div > * {
-    margin-top: 0;
-    margin-bottom: 20px;
+h1 {
+    font-size: 1.7rem;
+    line-height: 1.2;
+    margin: 0 0 6px;
 }
 
-div > *:last-child {
-    margin-bottom: 0px;
+h2 {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 0 0 26px;
 }
 
-details {
-    margin-top: 25px;
+h3 {
+    font-size: 1.15rem;
+    margin: 30px 0 12px;
 }
 
-summary {
-    font-weight: bold;
-    padding: 10px;
-    cursor: pointer;
-    background-color: light-dark(#eee, #444);
-    border: 1px solid light-dark(#444, #eee);
+h4 {
+    font-size: 1rem;
+    margin: 20px 0 10px;
 }
 
-.raised {
-    padding: 15px;
-    margin-top: 5px;
-    border-left: 3px solid light-dark(#444, #eee);
+p {
+    margin: 0 0 14px;
 }
 
-footer {
-    margin-top: 30px;
-    border-top: 1px solid light-dark(#555, #888);
-    padding-top: 16px;
-    color: light-dark(#555, #888);
-    font-size: 0.9em;
+ul {
+    margin: 4px 0 18px;
+    padding-left: 22px;
+}
+
+li {
+    margin: 3px 0;
+}
+
+a {
+    color: var(--accent);
+}
+
+code {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.92em;
+}
+
+/* Helpers ---------------------------------------------------------------- */
+
+.muted {
+    color: var(--muted);
+}
+
+.ok {
+    color: var(--ok);
+    font-weight: 600;
+}
+
+.off {
+    color: var(--muted);
+}
+
+.danger {
+    color: var(--danger);
 }
 
 .note {
-    color: light-dark(#555, #888);
-    font-size: 0.9em;
+    font-size: 0.92em;
+    color: var(--muted);
 }
 
-input,
-select,
-button {
-    font-size: 16px;
-    padding: 5px;
+/* Panels ----------------------------------------------------------------- */
+
+.raised {
+    padding: var(--pad);
+    margin: 16px 0;
+    background: var(--surface);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius);
 }
 
-button {
+.raised > *:last-child {
+    margin-bottom: 0;
+}
+
+/* Accordion -------------------------------------------------------------- */
+
+details {
+    margin: 18px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    overflow: hidden;
+}
+
+summary {
+    display: block;
     cursor: pointer;
+    padding: 14px 16px;
+    font-weight: 600;
+    background: var(--surface);
+    border-bottom: 1px solid transparent;
+    user-select: none;
 }
+
+details[open] summary {
+    border-bottom: 1px solid var(--border);
+}
+
+.details-body {
+    padding: 16px;
+}
+
+/* Forms ------------------------------------------------------------------ */
+
+form > * + * {
+    /* Forms get generous, consistent spacing between children. */
+    margin-top: 8px;
+}
+
+label {
+    display: block;
+    font-weight: 600;
+    margin: 4px 0;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="datetime-local"],
+select,
+textarea {
+    width: 100%;
+    padding: var(--input-pad);
+    font-size: 16px;
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin: 6px 0 18px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: transparent;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 72px;
+}
+
+input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+input[type="hidden"] {
+    display: none;
+}
+
+/* Buttons ---------------------------------------------------------------- */
+
+button,
+.mod-btn {
+    display: inline-block;
+    padding: 11px 18px;
+    font-size: 16px;
+    line-height: 1.2;
+    font-weight: 600;
+    border-radius: var(--radius);
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: var(--accent);
+    color: var(--accent-text);
+}
+
+button:hover,
+.mod-btn:hover {
+    filter: brightness(1.06);
+}
+
+button:disabled,
+.mod-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: none;
+}
+
+button.danger {
+    background: transparent;
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+button.ghost,
+.mod-btn.ghost,
+a.mod-btn {
+    background: transparent;
+    color: var(--ghost-text);
+    border-color: var(--border);
+}
+
+a.mod-btn {
+    text-decoration: none;
+}
+
+/* Security modules ------------------------------------------------------- */
 
 .secmodule {
-    border: 1px solid light-dark(#ccc, #555);
-    border-radius: 6px;
-    padding: 15px;
-    margin: 15px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin: 16px 0;
 }
 
 .secmodule.greyed {
     opacity: 0.55;
-    background: light-dark(#f4f4f4, #222);
+    background: var(--surface);
 }
 
 .secmodule.greyed input,
@@ -93,52 +274,78 @@ button {
 }
 
 .mod-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     cursor: pointer;
-    display: block;
-    margin-bottom: 10px;
+    font-weight: 600;
+    margin: 0 0 4px;
 }
 
-.mod-check input {
-    margin-right: 8px;
+.mod-check input[type="checkbox"] {
+    flex: none;
 }
 
 .secmod-body {
-    margin-top: 10px;
+    margin-top: 12px;
 }
 
-.mod-btn {
-    padding: 6px 12px;
-}
-
-.danger {
-    color: light-dark(#b00020, #ff6b6b);
-}
+/* QR / manual code ------------------------------------------------------- */
 
 .qr-wrap {
     text-align: center;
-    margin: 20px 0;
-    padding: 12px;
-    background: #fff;
-    border: 2px solid light-dark(#444, #eee);
-    display: inline-block;
-    width: 100%;
-    box-sizing: border-box;
+    margin: 18px 0;
+    padding: 18px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
 }
 
 .qr-img {
-    max-width: 220px;
+    max-width: 240px;
     height: auto;
-    padding: 12px;
+    padding: 10px;
     background: #fff;
+    border-radius: 6px;
     display: inline-block;
 }
 
 .manual-code {
     display: block;
-    background: light-dark(#f4f4f4, #1e1e1e);
-    color: light-dark(#111, #eee);
-    border: 1px solid light-dark(#ccc, #555);
+    background: var(--code-bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     padding: 12px;
+    margin: 8px 0 18px;
     word-break: break-all;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Misc ------------------------------------------------------------------- */
+
+.otp-input {
+    font-size: 18px !important;
+    letter-spacing: 6px;
+    text-align: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.88em;
+    line-height: 1.6;
+}
+
+footer a {
+    color: var(--ghost-text);
+}
+
+hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 28px 0;
 }

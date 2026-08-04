@@ -15,32 +15,28 @@
     <p>Enter your email, phone number, or Signal username to get started or log back in.</p>
 
     <form action="/send-code" method="POST">
-        <label>Email, phone, or Signal username:</label><br />
-        <input type="text" name="identifier" placeholder="you@email.com, +15555550123 (Signal), name.01" required /><br /><br />
-        <small style="color: #666;">Phone numbers and Signal usernames are messaged through their Signal account - we don't send SMS.</small>
-        <div class="cf-turnstile" data-sitekey="{{.TurnstileSiteKey}}"></div><br />
+        <label for="identifier">Email, phone, or Signal username</label>
+        <input type="text" id="identifier" name="identifier" placeholder="you@email.com, +15555550123 (Signal), name.01" required>
+        <small class="muted">Phone numbers and Signal usernames are messaged through their Signal account &mdash; we don't send SMS.</small>
+        <div class="cf-turnstile" data-sitekey="{{.TurnstileSiteKey}}"></div>
         <button type="submit">Send Verification Code</button>
     </form>
 
     <details>
-        <summary>What is this? (click to expand)</summary>
-        <div class="raised">
-            <p><strong>What this is:</strong> Regular check-ins (by email or Signal). If you don't respond, your emergency contacts get
-                notified.</p>
-            <p><strong>Who it's for:</strong> Activists, journalists, researchers, solo folks. Anyone who needs someone
-                to notice if they go silent.</p>
-            <p><strong>How it works:</strong> Choose daily or weekly pings. Click the link in the message (or reply "PONG"
-                to email) to confirm you're okay. Miss the ping? We'll send reminders. Still no response? Your emergency contacts
-                get alerted.</p>
-            <p style="font-size: 14px; margin-top: 10px;">Free forever. Premium hosting in Sweden for reliability.
-                Minimal data retention. <a href="https://github.com/micr0-dev/wellness-ping">Open source</a>.</p>
+        <summary>What is this?</summary>
+        <div class="details-body">
+            <p><strong>What this is:</strong> Regular check-ins (by email or Signal). If you don't respond, your emergency contacts get notified.</p>
+            <p><strong>Who it's for:</strong> Activists, journalists, researchers, solo folks. Anyone who needs someone to notice if they go silent.</p>
+            <p><strong>How it works:</strong> Choose daily or weekly pings. Click the link in the message (or reply "PONG" to email) to confirm you're okay. Miss the ping? We'll send reminders. Still no response? Your emergency contacts get alerted.</p>
+            <p class="note">Free forever. Premium hosting in Sweden for reliability. Minimal data retention. <a href="https://github.com/micr0-dev/wellness-ping">Open source</a>.</p>
         </div>
     </details>
+
     <details>
-        <summary>Privacy & Security (click to expand)</summary>
-        <div class="raised">
+        <summary>Privacy &amp; Security</summary>
+        <div class="details-body">
             <p><strong>What we store:</strong></p>
-            <ul style="margin: 5px 0 15px 20px;">
+            <ul>
                 <li>Your contact identifier (email, phone, or Signal username)</li>
                 <li>Emergency contact details (email / Signal / phone)</li>
                 <li>Check-in frequency and time preferences</li>
@@ -48,7 +44,7 @@
             </ul>
 
             <p><strong>What we DON'T store:</strong></p>
-            <ul style="margin: 5px 0 15px 20px;">
+            <ul>
                 <li>No logs of check-ins or access</li>
                 <li>No IP addresses</li>
                 <li>No tracking or analytics</li>
@@ -56,7 +52,7 @@
             </ul>
 
             <p><strong>Security measures:</strong></p>
-            <ul style="margin: 5px 0 15px 20px;">
+            <ul>
                 <li>Server hosted in Sweden with full disk encryption</li>
                 <li>SELinux security hardening</li>
                 <li>Session tokens expire after 30 minutes</li>
@@ -65,23 +61,16 @@
                 <li>Open source code for transparency</li>
             </ul>
 
-            <p><strong>Jurisdiction:</strong> Server in Sweden, operated from US. Provider (Finland). This makes legal
-                requests complex and requires international cooperation.</p>
+            <p><strong>Jurisdiction:</strong> Server in Sweden, operated from US. Provider (Finland). This makes legal requests complex and requires international cooperation.</p>
 
-            <p class="note">
-                <strong>Note:</strong> Built for reliability and security, but like any service, depends on email or Signal and
-                internet connectivity. Have backup plans.
-            </p>
+            <p class="note"><strong>Note:</strong> Built for reliability and security, but like any service, depends on email or Signal and internet connectivity. Have backup plans.</p>
         </div>
     </details>
 
     <footer>
-        <p style="font-size: 12px; color: #666;">
-            Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or
-            irc.micr0.dev:6667/6697 |
-            <a href="https://github.com/micr0-dev/wellness-ping">View source on GitHub</a> |
-            Version: {{.Version}}
-        </p>
+        Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or irc.micr0.dev:6667/6697 |
+        <a href="https://github.com/micr0-dev/wellness-ping">View source on GitHub</a> |
+        Version: {{.Version}}
     </footer>
 </body>
 

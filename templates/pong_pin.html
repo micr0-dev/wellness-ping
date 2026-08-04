@@ -1,23 +1,27 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Confirm - Wellness Ping</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
     <h1>Verification Required</h1>
     <p>Enter your PIN to continue.</p>
+
     <form action="{{.Action}}" method="POST">
         <input type="hidden" name="step" value="pin">
-        <label>PIN:</label><br>
-        <input type="password" name="pin" autocomplete="one-time-code" required autofocus><br><br>
+        <label for="pin">PIN</label>
+        <input type="password" id="pin" name="pin" autocomplete="one-time-code" required autofocus>
         <button type="submit">Continue</button>
     </form>
-    <br>
-    <a href="/">Back to home</a>
-    <hr>
+
+    <p><a href="/">Back to home</a></p>
+
     <footer>Version: {{.Version}}</footer>
 </body>
+
 </html>

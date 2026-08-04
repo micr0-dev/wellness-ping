@@ -14,11 +14,11 @@
     {{if not .User}}
     <div class="raised">
         <p><b>How it works:</b></p>
-        <p>We'll send you a check-in email at your preferred time. Click the link or reply "PONG" to confirm you're okay.</p>
+        <p>We'll send you a check-in message at your preferred time. Click the link (or reply "PONG") to confirm you're okay.</p>
         <p>If you don't respond, we'll send reminders. If you still don't respond by your next ping, we'll alert your contacts.</p>
         <p><b>Daily:</b> 3 reminders over 24 hours (every 6 hours)</p>
         <p><b>Weekly:</b> 6 reminders over 7 days (once per day)</p>
-        <p style="margin-top: 10px;"><b>Note:</b> Your contacts are NOT notified when you add them. You may want to let them know personally that they're on your emergency contact list.</p>
+        <p class="note"><b>Note:</b> Your contacts are NOT notified when you add them. You may want to let them know personally that they're on your emergency contact list.</p>
     </div>
     {{end}}
 
@@ -32,21 +32,20 @@
         <p><b>Ping Frequency:</b> {{.User.PingFrequency}}</p>
         <p><b>Check-in Time:</b> {{.User.CheckInHour}}:00</p>
         {{if .User.PausedUntil}}<p><b>Vacation Pause:</b> Active until {{.User.PausedUntil}}</p>{{end}}
-        <br>
         {{end}}
 
-        <label>Alert Contacts (comma-separated email / Signal username / phone):</label><br>
-        <input type="text" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required><br>
-        <small style="color: #666;">Phone numbers and Signal usernames are messaged through each contact's Signal account - not SMS.</small><br><br>
+        <label for="alert_emails">Alert Contacts (comma-separated email / Signal username / phone)</label>
+        <input type="text" id="alert_emails" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required>
+        <small class="muted">Phone numbers and Signal usernames are messaged through each contact's Signal account &mdash; not SMS.</small>
 
-        <label>Ping Frequency:</label><br>
-        <select name="ping_frequency">
+        <label for="ping_frequency">Ping Frequency</label>
+        <select id="ping_frequency" name="ping_frequency">
             <option value="daily" {{if .User}}{{if eq .User.PingFrequency "daily" }}selected{{end}}{{end}}>Daily</option>
             <option value="weekly" {{if .User}}{{if eq .User.PingFrequency "weekly" }}selected{{end}}{{end}}>Weekly</option>
-        </select><br><br>
+        </select>
 
-        <label>Your Timezone:</label><br>
-        <select name="timezone" required>
+        <label for="timezone">Your Timezone</label>
+        <select id="timezone" name="timezone" required>
             <option value="UTC">UTC</option>
             <option value="America/New_York">Eastern Time (US)</option>
             <option value="America/Chicago">Central Time (US)</option>
@@ -66,27 +65,27 @@
             <option value="Asia/Tokyo">Tokyo</option>
             <option value="Australia/Sydney">Sydney</option>
             <option value="Pacific/Auckland">New Zealand</option>
-        </select><br><br>
+        </select>
 
-        <label>Preferred Check-in Time (your local time):</label><br>
-        <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br><br>
+        <label for="checkin_hour">Preferred Check-in Time (your local time)</label>
+        <input type="number" id="checkin_hour" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00
 
         <h3>Extra Security</h3>
-        <p style="color: #666;">Amplify your verification. You can enable any combination - each enabled module must be completed before a check-in or a settings sign-in is accepted. Tick a module's box to edit it.</p>
+        <p class="muted">Amplify your verification. You can enable any combination &mdash; each enabled module must be completed before a check-in or a settings sign-in is accepted. Tick a module's box to edit it.</p>
 
         <!-- Check-in PIN + Duress PIN -->
         <div class="secmodule greyed" id="pin-mod">
             <label class="mod-check">
                 <input type="checkbox" name="pin_enable" value="1" id="pin_enable" onchange="toggleModule('pin')" {{if .PinEnabled}}checked{{end}}>
-                <b>Check-in PIN &amp; Duress PIN</b>
+                <span>Check-in PIN &amp; Duress PIN</span>
             </label>
             <div class="secmod-body" id="pin-body">
-                <p style="color: #666;">A PIN is required to complete a check-in or sign into settings. The Duress PIN silently alerts your contacts instead of confirming.</p>
-                <label>Check-in PIN:</label><br>
-                <input type="password" name="pin_pin" placeholder="Choose a PIN" {{if not .PinEnabled}}disabled{{end}}><br><br>
-                <label>Duress PIN (optional):</label><br>
-                <input type="password" name="pin_duress" placeholder="Separate duress PIN" {{if not .PinEnabled}}disabled{{end}}><br>
-                {{if not .PinEnabled}}<small style="color: #666;">Tick the box to set up your PIN.</small>{{end}}
+                <p class="muted">A PIN is required to complete a check-in or sign into settings. The Duress PIN silently alerts your contacts instead of confirming.</p>
+                <label for="pin_pin">Check-in PIN</label>
+                <input type="password" id="pin_pin" name="pin_pin" placeholder="Choose a PIN" {{if not .PinEnabled}}disabled{{end}}>
+                <label for="pin_duress">Duress PIN (optional)</label>
+                <input type="password" id="pin_duress" name="pin_duress" placeholder="Separate duress PIN" {{if not .PinEnabled}}disabled{{end}}>
+                {{if not .PinEnabled}}<small class="muted">Tick the box to set up your PIN.</small>{{end}}
             </div>
         </div>
 
@@ -94,19 +93,19 @@
         <div class="secmodule greyed" id="totp-mod">
             <label class="mod-check">
                 <input type="checkbox" name="totp_enable" value="1" id="totp_enable" onchange="toggleModule('totp')" {{if .TOTPEnabled}}checked{{end}}>
-                <b>Authenticator App (2FA)</b>
+                <span>Authenticator App (2FA)</span>
             </label>
             <div class="secmod-body" id="totp-body">
-                <p style="color: #666;">Requires a 6-digit code from your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
+                <p class="muted">Requires a 6-digit code from your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
                 {{if .TOTPConfigured}}
-                <p>{{if .TOTPEnabled}}<span style="color: green;">Enabled</span> - a code is required to sign in and to check in{{else}}<span style="color: #888;">Set up but currently off</span> - tick the box and save to require it{{end}}</p>
-                <a class="mod-btn" href="/totp-setup">Reconfigure</a>
-                <button type="submit" class="mod-btn danger" name="action" value="clear_totp">Clear 2FA</button>
+                <p>{{if .TOTPEnabled}}<span class="ok">Enabled</span> &mdash; a code is required to sign in and to check in{{else}}<span class="off">Set up but currently off</span> &mdash; tick the box and save to require it{{end}}</p>
+                <button type="button" class="ghost" onclick="location.href='/totp-setup'">Reconfigure</button>
+                <button type="submit" class="danger" name="action" value="clear_totp">Clear 2FA</button>
                 {{else if not .User}}
-                <p><span style="color: #888;">Save your settings first - then you can set up 2FA.</span></p>
+                <p class="muted">Save your settings first &mdash; then you can set up 2FA.</p>
                 {{else}}
-                <p><span style="color: #888;">Not set up.</span></p>
-                <a class="mod-btn" href="/totp-setup">Set up Authenticator App</a>
+                <p class="muted">Not set up.</p>
+                <button type="button" class="ghost" onclick="location.href='/totp-setup'">Set up Authenticator App</button>
                 {{end}}
             </div>
         </div>
@@ -115,60 +114,59 @@
         <div class="secmodule greyed" id="passkey-mod">
             <label class="mod-check">
                 <input type="checkbox" name="passkey_enable" value="1" id="passkey_enable" onchange="toggleModule('passkey')" {{if .PasskeyEnabled}}checked{{end}}>
-                <b>Passkey</b>
+                <span>Passkey</span>
             </label>
             <div class="secmod-body" id="passkey-body">
-                <p style="color: #666;">Requires a passkey (platform authenticator, security key, or phone).</p>
+                <p class="muted">Requires a passkey (platform authenticator, security key, or phone).</p>
                 {{if .PasskeyConfigured}}
-                <p>{{if .PasskeyEnabled}}<span style="color: green;">Enabled</span> - a passkey is required to sign in and to check in{{else}}<span style="color: #888;">Registered but currently off</span> - tick the box and save to require it{{end}}</p>
-                <button type="button" class="mod-btn" onclick="registerPasskey()">Re-register Passkey</button>
-                <button type="submit" class="mod-btn danger" name="action" value="clear_passkey">Remove Passkey</button>
-                <span id="passkey-status" style="color: #666;"></span>
+                <p>{{if .PasskeyEnabled}}<span class="ok">Enabled</span> &mdash; a passkey is required to sign in and to check in{{else}}<span class="off">Registered but currently off</span> &mdash; tick the box and save to require it{{end}}</p>
+                <button type="button" class="ghost" onclick="registerPasskey()">Re-register Passkey</button>
+                <button type="submit" class="danger" name="action" value="clear_passkey">Remove Passkey</button>
+                <span id="passkey-status" class="muted"></span>
                 {{else if not .User}}
-                <p><span style="color: #888;">Save your settings first - then you can register a passkey.</span></p>
+                <p class="muted">Save your settings first &mdash; then you can register a passkey.</p>
                 {{else}}
-                <p><span style="color: #888;">Not set up.</span></p>
-                <button type="button" class="mod-btn" onclick="registerPasskey()">Register Passkey</button>
-                <span id="passkey-status" style="color: #666;"></span>
+                <p class="muted">Not set up.</p>
+                <button type="button" class="ghost" onclick="registerPasskey()">Register Passkey</button>
+                <span id="passkey-status" class="muted"></span>
                 {{end}}
             </div>
         </div>
 
         <details>
-            <summary><b>Vacation / Travel Mode</b></summary>
-            <br>
-            <label>Pause check-ins until (optional):</label><br>
-            <input type="datetime-local" name="paused_until" value="{{if .User}}{{if .User.PausedUntil}}{{.User.PausedUntil.Format "2006-01-02T15:04"}}{{end}}{{end}}"><br>
-            <small style="color: #666;">Set an end date/time. Check-ins will be disabled until then, then auto-resume.</small><br>
-        </details><br>
+            <summary>Vacation / Travel Mode</summary>
+            <div class="details-body">
+                <label for="paused_until">Pause check-ins until (optional)</label>
+                <input type="datetime-local" id="paused_until" name="paused_until" value="{{if .User}}{{if .User.PausedUntil}}{{.User.PausedUntil.Format "2006-01-02T15:04"}}{{end}}{{end}}">
+                <small class="muted">Set an end date/time. Check-ins will be disabled until then, then auto-resume.</small>
+            </div>
+        </details>
 
         <details>
-            <summary><b>Custom Alert Messages</b></summary>
-            <br>
-            <label>Custom Alert Message (what contacts receive when you don't check in):</label><br>
-            <textarea name="alert_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AlertMessage}}{{end}}</textarea><br><br>
-            <label>Custom All-Clear Message:</label><br>
-            <textarea name="all_clear_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AllClearMessage}}{{end}}</textarea><br>
-        </details><br>
+            <summary>Custom Alert Messages</summary>
+            <div class="details-body">
+                <label for="alert_message">Custom Alert Message (what contacts receive when you don't check in)</label>
+                <textarea id="alert_message" name="alert_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AlertMessage}}{{end}}</textarea>
+                <label for="all_clear_message">Custom All-Clear Message</label>
+                <textarea id="all_clear_message" name="all_clear_message" rows="3" placeholder="Leave empty for default message">{{if .User}}{{.User.AllClearMessage}}{{end}}</textarea>
+            </div>
+        </details>
 
-        <button type="submit" name="action" value="save">Save Settings</button><br><br>
+        <button type="submit" name="action" value="save">Save Settings</button>
 
         {{if .User}}
-        <button type="submit" name="action" value="stop">Stop Service & Delete All Data</button>
+        <button type="submit" name="action" value="stop">Stop Service &amp; Delete All Data</button>
         {{end}}
     </form>
 
     {{if .User}}
-    <br>
     <form action="/test-ping" method="POST">
-        <button type="submit">Send Test Ping Now</button>
+        <button type="submit" class="ghost">Send Test Ping Now</button>
     </form>
     {{end}}
 
-    <br>
-    <a href="/">Back to home</a>
+    <p><a href="/">Back to home</a></p>
 
-    <hr>
     <footer>
         Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
         Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or irc.micr0.dev:6667/6697 |
@@ -200,7 +198,7 @@
             const bin = atob(b64);
             const bytes = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            return bytes; // ArrayBufferView
+            return bytes;
         }
         function bufToB64url(buf) {
             const bytes = new Uint8Array(buf);
@@ -216,7 +214,6 @@
                 const optsResp = await fetch('/passkey-register-begin');
                 if (!optsResp.ok) { status.textContent = await optsResp.text(); return; }
                 const options = await optsResp.json();
-                // WebAuthn needs binary buffers, not base64url strings.
                 options.publicKey.challenge = b64urlToBuf(options.publicKey.challenge);
                 options.publicKey.user.id = b64urlToBuf(options.publicKey.user.id);
 

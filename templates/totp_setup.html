@@ -11,26 +11,23 @@
 <body>
     <h1>Setup Authenticator App</h1>
     <p>Scan the QR code below with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
-    
+
     <div class="qr-wrap">
         <img class="qr-img" src="{{.QR}}" alt="QR Code">
     </div>
-    
-    <p><b>Or enter this code manually:</b></p>
+
+    <p><strong>Or enter this code manually:</strong></p>
     <code class="manual-code">{{.Secret}}</code>
-    
-    <br>
+
     <form action="/totp-verify" method="POST">
         <input type="hidden" name="secret" value="{{.Secret}}">
-        <label>Enter the 6-digit code from your app:</label><br>
-        <input type="text" name="code" pattern="[0-9]{6}" placeholder="123456" required maxlength="6" style="font-size: 18px; letter-spacing: 5px; text-align: center;"><br><br>
+        <label for="code">Enter the 6-digit code from your app</label>
+        <input type="text" id="code" name="code" class="otp-input" pattern="[0-9]{6}" placeholder="123456" required maxlength="6">
         <button type="submit">Verify and Enable</button>
     </form>
-    
-    <br>
-    <a href="/settings">Cancel</a>
 
-    <hr>
+    <p><a href="/settings">Cancel</a></p>
+
     <footer>
         Version: {{.Version}} |
         <a href="/settings">Back to Settings</a>
