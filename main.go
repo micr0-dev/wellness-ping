@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -1409,6 +1410,25 @@ func sendAllClearEmail(user *User) {
 	}
 }
 
+// urlPattern matches http(s) URLs in the email body so they can be linked.
+var urlPattern = regexp.MustCompile(`https?://[^\s<>"']+`)
+
+// plainToHTML converts a plaintext body into an HTML body: it HTML-escapes
+// the text (except URLs), turns any URL into a clickable link, and converts
+// newlines to <br> so the link works in mail clients.
+func plainToHTML(text string) string {
+	var sb strings.Builder
+	last := 0
+	for _, m := range urlPattern.FindAllStringIndex(text, -1) {
+		sb.WriteString(template.HTMLEscapeString(text[last:m[0]]))
+		u := template.HTMLEscapeString(text[m[0]:m[1]])
+		sb.WriteString(fmt.Sprintf(`<a href="%s">%s</a>`, u, u))
+		last = m[1]
+	}
+	sb.WriteString(template.HTMLEscapeString(text[last:]))
+	return strings.ReplaceAll(sb.String(), "\n", "<br>")
+}
+
 func sendEmail(to, subject, body string) {
 	token := os.Getenv("POSTMARK_TOKEN")
 	if token == "" {
@@ -1416,12 +1436,13 @@ func sendEmail(to, subject, body string) {
 		return
 	}
 
-	htmlBody := strings.ReplaceAll(body, "\n", "<br>")
+	htmlBody := plainToHTML(body)
 
-	payload := map[string]string{
+	payload := map[string]interface{}{
 		"From":          "ping@wellness-p.ing",
 		"To":            to,
 		"Subject":       subject,
+		"TextBody":      body,
 		"HtmlBody":      htmlBody,
 		"MessageStream": "outbound",
 	}
