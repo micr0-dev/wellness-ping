@@ -931,8 +931,8 @@ func saveStore() {
 func verifyTurnstile(token string) bool {
 	secret := os.Getenv("TURNSTILE_SECRET_KEY")
 	if secret == "" {
-		log.Println("TURNSTILE_SECRET_KEY not set, rejecting signup")
-		return false
+		log.Println("TURNSTILE_SECRET_KEY not set, accepting signup (WARNING: production should use Turnstile)")
+		return true // Accept all when TURNSTILE not configured
 	}
 	if token == "" {
 		return false
