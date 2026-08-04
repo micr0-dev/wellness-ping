@@ -95,5 +95,51 @@
                 }
             });
         });
+
+        wireKeySequence();
     });
+
+    // A little something for the keyboard-inclined. Ignored while typing in
+    // form fields so it never fires from normal input.
+    var SEQUENCE = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+    var seqPos = 0;
+
+    function wireKeySequence() {
+        document.addEventListener('keydown', function (ev) {
+            var t = ev.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) {
+                seqPos = 0;
+                return;
+            }
+            var key = ev.key;
+            if (key === SEQUENCE[seqPos]) {
+                seqPos += 1;
+                if (seqPos === SEQUENCE.length) {
+                    seqPos = 0;
+                    tableFlip();
+                }
+            } else {
+                seqPos = (key === SEQUENCE[0]) ? 1 : 0;
+            }
+        });
+    }
+
+    function tableFlip() {
+        var flips = [
+            '(╯°□°）╯︵ ┻━┻',
+            '(ノ°Д°）ノ︵ ┻━┻',
+            '(╯°□°）╯︵ ┴─┴',
+            '(ノ ゜Д゜)ノ ︵ ┻━┻',
+            '╯︵ ┻━┻ ︵ ┬─┬ ／(.○.）＼',
+            '(╯‵□′)╯︵┻━┻',
+            '┻━┻︵ ヽ(´Д`。)ノ︵ ┻━┻'
+        ];
+        var box = document.createElement('div');
+        box.textContent = flips[Math.floor(Math.random() * flips.length)];
+        box.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
+            'text-align:center;font-size:24px;line-height:1.6;background:rgba(0,0,0,0.85);color:#fff;' +
+            'z-index:99999;cursor:pointer;padding:20px;';
+        box.addEventListener('click', function () { box.remove(); });
+        document.body.appendChild(box);
+    }
 })();
