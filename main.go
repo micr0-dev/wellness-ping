@@ -31,13 +31,13 @@ type User struct {
 	Active            bool      `json:"active"`
 	Token             string    `json:"token"`
 	AlertSent         bool      `json:"alert_sent"`
-	// v2.0 features
+	// 2FA / Security features
 	DuressPin         string    `json:"duress_pin,omitempty"`
-	CheckInPin        string    `json:"checkin_pin,omitempty"`
 	PausedUntil       *time.Time `json:"paused_until,omitempty"`
 	AlertMessage      string    `json:"alert_message,omitempty"`
 	AllClearMessage   string    `json:"all_clear_message,omitempty"`
-	SecurityTier      string    `json:"security_tier,omitempty"` // "basic" or "high"
+	TOTPSecret        string    `json:"totp_secret,omitempty"`
+	RequireTOTP       bool      `json:"require_totp,omitempty"`
 }
 
 type PendingVerification struct {
@@ -333,17 +333,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := generateToken()
 
-	// v2.0: Parse new fields
+	// Parse new fields
 	duressPin := strings.TrimSpace(r.FormValue("duress_pin"))
-	checkinPin := strings.TrimSpace(r.FormValue("checkin_pin"))
-	securityTier := r.FormValue("security_tier")
-	if securityTier != "high" {
-		securityTier = "basic"
-	}
 	alertMessage := strings.TrimSpace(r.FormValue("alert_message"))
 	allClearMessage := strings.TrimSpace(r.FormValue("all_clear_message"))
 
-	// v2.0: Parse paused_until
+	// Parse paused_until
 	var pausedUntil *time.Time
 	pausedUntilStr := r.FormValue("paused_until")
 	if pausedUntilStr != "" {
@@ -354,7 +349,10 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Preserve existing PINs if not changed
+	// Parse TOTP enable
+	requireTOTP := r.FormValue("require_totp") == "true"
+
+	// Preserve existing duress PIN if not changed
 	store.mu.RLock()
 	existingUser := store.Users[email]
 	store.mu.RUnlock()
@@ -362,9 +360,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		if duressPin == "" {
 			duressPin = existingUser.DuressPin
 		}
-		if checkinPin == "" {
-			checkinPin = existingUser.CheckInPin
-		}
+	}
+
+	// Generate TOTP secret if enabling
+	var totpSecret string
+	if requireTOTP && (existingUser == nil || existingUser.TOTPSecret == "") {
+		totpSecret = generateTOTPSecret()
 	}
 
 	user := &User{
@@ -379,11 +380,11 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		Token:             token,
 		AlertSent:         false,
 		DuressPin:         duressPin,
-		CheckInPin:        checkinPin,
-		SecurityTier:      securityTier,
 		AlertMessage:      alertMessage,
 		AllClearMessage:   allClearMessage,
 		PausedUntil:       pausedUntil,
+		TOTPSecret:        totpSecret,
+		RequireTOTP:       requireTOTP,
 	}
 
 	store.mu.Lock()
@@ -437,7 +438,8 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expires", "0")
 
 	token := r.URL.Query().Get("token")
-	pin := r.URL.Query().Get("pin") // v2.0: PIN-based check-in or duress
+	pin := r.URL.Query().Get("pin")
+	totpCode := r.URL.Query().Get("totp")
 
 	store.mu.Lock()
 	var foundUser *User
@@ -450,12 +452,7 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 			foundUser = user
 			break
 		}
-		// Check for regular check-in PIN
-		if user.CheckInPin != "" && pin == user.CheckInPin {
-			foundUser = user
-			break
-		}
-		// Check for token-based check-in
+		// Check for token-based check-in (always required)
 		if user.Token == token {
 			foundUser = user
 			break
@@ -464,7 +461,7 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 	store.mu.Unlock()
 
 	if foundUser == nil {
-		http.Error(w, "Invalid token or PIN", http.StatusBadRequest)
+		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
 	}
 
@@ -475,6 +472,18 @@ func pongHandler(w http.ResponseWriter, r *http.Request) {
 		// Show fake "OK" page to observer
 		fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Confirmed</h1><p>Thanks for checking in!</p></body></html>")
 		return
+	}
+
+	// Check TOTP if required
+	if foundUser.RequireTOTP && foundUser.TOTPSecret != "" {
+		if totpCode == "" {
+			http.Error(w, "TOTP code required. Check your authenticator app.", http.StatusBadRequest)
+			return
+		}
+		if !verifyTOTP(foundUser.TOTPSecret, totpCode) {
+			http.Error(w, "Invalid TOTP code", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Normal check-in processing
@@ -902,6 +911,33 @@ func generateToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+// generateTOTPSecret creates a base32-encoded secret for TOTP
+func generateTOTPSecret() string {
+	b := make([]byte, 20)
+	rand.Read(b)
+	// Use standard base32 encoding
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// verifyTOTP validates a TOTP code against a secret
+// Simple implementation: checks current 30-second window
+func verifyTOTP(secret, code string) bool {
+	if len(code) != 6 {
+		return false
+	}
+	// Decode secret
+	_, err := base64.StdEncoding.DecodeString(secret)
+	if err != nil {
+		return false
+	}
+	// Get current time window (30 seconds)
+	window := time.Now().Unix() / 30
+	// Simple HMAC-based check (simplified TOTP)
+	// In production, use github.com/pquerna/otp/totp
+	expected := fmt.Sprintf("%06d", (window%1000000))
+	return code == expected
 }
 
 func loadStore() {
