@@ -369,6 +369,13 @@ a.mod-btn {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.version {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
 footer {
     margin-top: 36px;
     padding-top: 14px;
