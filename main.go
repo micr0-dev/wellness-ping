@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"html/template"
 	"io"
@@ -17,7 +18,7 @@ import (
 	"time"
 )
 
-const VERSION = "1.0.5"
+const VERSION = "2.0.0"
 
 type User struct {
 	Email             string    `json:"email"`
@@ -65,6 +66,10 @@ var store = &Store{
 }
 
 func main() {
+	// Parse command line flags
+	port := flag.Int("port", 8080, "Port to listen on")
+	flag.Parse()
+
 	if os.Getenv("POSTMARK_TOKEN") == "" {
 		log.Println("Warning: POSTMARK_TOKEN not set. Emails will not be sent.")
 	}
@@ -87,8 +92,9 @@ func main() {
 
 	go pingScheduler()
 
-	log.Println("Server starting on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	addr := fmt.Sprintf(":%d", *port)
+	log.Printf("Server starting on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
