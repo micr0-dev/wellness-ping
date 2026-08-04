@@ -71,60 +71,63 @@
         <input type="number" name="checkin_hour" value="{{if .User}}{{.User.CheckInHour}}{{else}}9{{end}}" min="0" max="23" required> : 00<br><br>
 
         <h3>Extra Security</h3>
-        <p style="color: #666;">Enable security modules to add extra verification before a check-in is accepted. Each enabled module must be completed before your check-in registers. Module sections are greyed out until you check the box to enable them.</p>
+        <p style="color: #666;">Amplify your verification. You can enable any combination - each enabled module must be completed before a check-in or a settings sign-in is accepted. Tick a module's box to edit it.</p>
 
-        <!-- PIN + Duress module -->
-        <div class="secmodule greyed">
+        <!-- Check-in PIN + Duress PIN -->
+        <div class="secmodule greyed" id="pin-mod">
             <label class="mod-check">
                 <input type="checkbox" name="pin_enable" value="1" id="pin_enable" onchange="toggleModule('pin')" {{if .PinEnabled}}checked{{end}}>
                 <b>Check-in PIN &amp; Duress PIN</b>
             </label>
             <div class="secmod-body" id="pin-body">
-                <p style="color: #666;">Requires a PIN to complete check-in. The Duress PIN silently alerts your contacts instead of confirming.</p>
+                <p style="color: #666;">A PIN is required to complete a check-in or sign into settings. The Duress PIN silently alerts your contacts instead of confirming.</p>
                 <label>Check-in PIN:</label><br>
-                <input type="password" name="pin_pin" value="{{.PinPin}}" {{if not .PinEnabled}}disabled{{end}}><br><br>
+                <input type="password" name="pin_pin" placeholder="Choose a PIN" value="{{.PinPin}}" {{if not .PinEnabled}}disabled{{end}}><br><br>
                 <label>Duress PIN (optional):</label><br>
-                <input type="password" name="pin_duress" value="{{.PinDuress}}" {{if not .PinEnabled}}disabled{{end}}><br>
-                {{if .PinEnabled}}<small style="color: #666;">Enabled. Save settings to update, or uncheck to disable.</small>{{end}}
+                <input type="password" name="pin_duress" placeholder="Separate duress PIN" value="{{.PinDuress}}" {{if not .PinEnabled}}disabled{{end}}><br>
+                {{if not .PinEnabled}}<small style="color: #666;">Tick the box to set up your PIN.</small>{{end}}
             </div>
         </div>
 
-        <!-- TOTP module -->
-        <div class="secmodule greyed">
+        <!-- Authenticator App (2FA) -->
+        <div class="secmodule greyed" id="totp-mod">
             <label class="mod-check">
-                <input type="checkbox" id="totp_enable" onchange="toggleModule('totp')" {{if .TOTPEnabled}}checked{{end}}>
+                <input type="checkbox" name="totp_enable" value="1" id="totp_enable" onchange="toggleModule('totp')" {{if .TOTPEnabled}}checked{{end}}>
                 <b>Authenticator App (2FA)</b>
             </label>
             <div class="secmod-body" id="totp-body">
                 <p style="color: #666;">Requires a 6-digit code from your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
-                {{if .TOTPEnabled}}
-                <p><span style="color: green;">Enabled</span></p>
-                <a href="/totp-setup">Reconfigure</a> |
-                <form action="/totp-disable" method="POST" style="display: inline;"><button type="submit">Disable</button></form>
+                {{if .TOTPConfigured}}
+                <p>{{if .TOTPEnabled}}<span style="color: green;">Enabled</span> - a code is required to sign in and to check in{{else}}<span style="color: #888;">Set up but currently off</span> - tick the box and save to require it{{end}}</p>
+                <a class="mod-btn" href="/totp-setup">Reconfigure</a>
+                <button type="submit" class="mod-btn danger" name="action" value="clear_totp">Clear 2FA</button>
                 {{else}}
-                <a class="mod-btn" href="/totp-setup" {{if not .TOTPEnabled}}tabindex="-1"{{end}}>Set up Authenticator App</a>
+                <p><span style="color: #888;">Not set up.</span></p>
+                <a class="mod-btn" href="/totp-setup">Set up Authenticator App</a>
                 {{end}}
             </div>
         </div>
 
-        <!-- Passkey module -->
-        <div class="secmodule greyed">
+        <!-- Passkey -->
+        <div class="secmodule greyed" id="passkey-mod">
             <label class="mod-check">
-                <input type="checkbox" id="passkey_enable" onchange="toggleModule('passkey')" {{if .PasskeyEnabled}}checked{{end}}>
+                <input type="checkbox" name="passkey_enable" value="1" id="passkey_enable" onchange="toggleModule('passkey')" {{if .PasskeyEnabled}}checked{{end}}>
                 <b>Passkey</b>
             </label>
             <div class="secmod-body" id="passkey-body">
                 <p style="color: #666;">Requires a passkey (platform authenticator, security key, or phone).</p>
-                {{if .PasskeyEnabled}}
-                <p><span style="color: green;">Enabled</span></p>
-                <button class="mod-btn" onclick="registerPasskey(); return false;">Re-register Passkey</button> |
-                <form action="/passkey-disable" method="POST" style="display: inline;"><button type="submit">Disable</button></form>
+                {{if .PasskeyConfigured}}
+                <p>{{if .PasskeyEnabled}}<span style="color: green;">Enabled</span> - a passkey is required to sign in and to check in{{else}}<span style="color: #888;">Registered but currently off</span> - tick the box and save to require it{{end}}</p>
+                <button type="button" class="mod-btn" onclick="registerPasskey()">Re-register Passkey</button>
+                <button type="submit" class="mod-btn danger" name="action" value="clear_passkey">Remove Passkey</button>
+                <span id="passkey-status" style="color: #666;"></span>
                 {{else}}
-                <button class="mod-btn" onclick="registerPasskey(); return false;">Register Passkey</button>
+                <p><span style="color: #888;">Not set up.</span></p>
+                <button type="button" class="mod-btn" onclick="registerPasskey()">Register Passkey</button>
+                <span id="passkey-status" style="color: #666;"></span>
                 {{end}}
             </div>
         </div>
-        <span id="passkey-status" style="color: #666;"></span>
 
         <details>
             <summary><b>Vacation / Travel Mode</b></summary>
@@ -174,26 +177,17 @@
         function toggleModule(name) {
             const box = document.getElementById(name + '_enable');
             const body = document.getElementById(name + '-body');
-            const section = body.closest('.secmodule');
+            const module = document.getElementById(name + '-mod');
             const enabled = box.checked;
             if (enabled) {
-                section.classList.remove('greyed');
+                module.classList.remove('greyed');
             } else {
-                section.classList.add('greyed');
+                module.classList.add('greyed');
             }
-            // toggle disabled state on inputs/links/buttons in the body
-            const controls = body.querySelectorAll('input, button, a, textarea');
+            const controls = body.querySelectorAll('input, textarea');
             controls.forEach(el => {
-                if (enabled) {
-                    el.removeAttribute('disabled');
-                    el.removeAttribute('tabindex');
-                } else {
-                    el.setAttribute('disabled', 'disabled');
-                    el.setAttribute('tabindex', '-1');
-                }
+                if (enabled) { el.removeAttribute('disabled'); } else { el.setAttribute('disabled', 'disabled'); }
             });
-            // For non-pin modules, the enable is done via ceremony, so unchecking here is just UI.
-            // Actual enabling happens through the setup flow.
         }
 
         async function registerPasskey() {
@@ -221,9 +215,7 @@
             }
         }
 
-        // Initialize on load
         window.addEventListener('DOMContentLoaded', () => {
-            // keep modules enabled per server state
             if (document.getElementById('pin_enable').checked) toggleModule('pin');
             if (document.getElementById('totp_enable').checked) toggleModule('totp');
             if (document.getElementById('passkey_enable').checked) toggleModule('passkey');

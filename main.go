@@ -222,11 +222,8 @@ func main() {
 	// Security module setup
 	http.HandleFunc("/totp-setup", totpSetupHandler)
 	http.HandleFunc("/totp-verify", totpVerifyHandler)
-	http.HandleFunc("/totp-disable", totpDisableHandler)
-	http.HandleFunc("/pin-disable", pinDisableHandler)
 	http.HandleFunc("/passkey-register-begin", passkeyRegisterBegin)
 	http.HandleFunc("/passkey-register-finish", passkeyRegisterFinish)
-	http.HandleFunc("/passkey-disable", passkeyDisableHandler)
 
 	// Passkey check-in ceremony
 	http.HandleFunc("/passkey-login-begin", passkeyLoginBegin)
@@ -379,11 +376,13 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		"User":           user,
 		"Email":          email,
 		"Version":        VERSION,
-		"PinEnabled":     moduleEnabled(user, "pin"),
-		"TOTPEnabled":    moduleEnabled(user, "totp"),
-		"PasskeyEnabled": moduleEnabled(user, "passkey"),
-		"PinPin":         modulePINConfig(user, "pin"),
-		"PinDuress":      modulePINConfig(user, "duress"),
+		"PinEnabled":        moduleEnabled(user, "pin"),
+		"TOTPEnabled":       moduleEnabled(user, "totp"),
+		"PasskeyEnabled":    moduleEnabled(user, "passkey"),
+		"TOTPConfigured":    moduleConfigured(user, "totp"),
+		"PasskeyConfigured": moduleConfigured(user, "passkey"),
+		"PinPin":            modulePINConfig(user, "pin"),
+		"PinDuress":         modulePINConfig(user, "duress"),
 	}
 
 	tmpl := template.Must(template.ParseFiles("templates/settings.html"))
@@ -516,6 +515,31 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	existingUser := store.Users[email]
 	store.mu.RUnlock()
 
+	// Module-level actions that affect only one module (no full save).
+	switch action {
+	case "clear_totp":
+		store.mu.Lock()
+		setModuleEnabled(existingUser, "totp", "", false)
+		store.mu.Unlock()
+		saveStore()
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	case "clear_passkey":
+		store.mu.Lock()
+		setModuleEnabled(existingUser, "passkey", "", false)
+		store.mu.Unlock()
+		saveStore()
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	case "clear_pin":
+		store.mu.Lock()
+		setModuleEnabled(existingUser, "pin", "", false)
+		store.mu.Unlock()
+		saveStore()
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
+
 	user := &User{
 		Email:             email,
 		AlertEmails:       alertEmails,
@@ -535,19 +559,42 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		user.SecurityModules = existingUser.SecurityModules
 	}
 
-	// PIN module: read from the settings form (checkbox + fields)
+	// PIN module: enable => require a non-empty PIN; disable => keep config,
+	// simply flip it off.
 	pinEnabled := r.FormValue("pin_enable") == "1"
 	pinVal := strings.TrimSpace(r.FormValue("pin_pin"))
 	duressVal := strings.TrimSpace(r.FormValue("pin_duress"))
 	if pinEnabled {
+		if pinVal == "" {
+			http.Error(w, "Check-in PIN cannot be empty when enabled", http.StatusBadRequest)
+			return
+		}
 		cfg, _ := json.Marshal(PINConfig{Pin: pinVal, Duress: duressVal})
-		store.mu.Lock()
 		setModuleEnabled(user, "pin", string(cfg), true)
-		store.mu.Unlock()
 	} else {
-		store.mu.Lock()
-		setModuleEnabled(user, "pin", "", false)
-		store.mu.Unlock()
+		old := getModuleConfig(user, "pin")
+		setModuleEnabled(user, "pin", old, false)
+	}
+
+	// TOTP: enabling only sticks if a secret is already configured; otherwise
+	// the user must go through the setup ceremony. Unchecking disables it.
+	totpEnabled := r.FormValue("totp_enable") == "1"
+	if totpEnabled {
+		if sec := getModuleConfig(user, "totp"); sec != "" {
+			setModuleEnabled(user, "totp", sec, true)
+		}
+	} else {
+		setModuleEnabled(user, "totp", getModuleConfig(user, "totp"), false)
+	}
+
+	// Passkey: same pattern as TOTP.
+	passkeyEnabled := r.FormValue("passkey_enable") == "1"
+	if passkeyEnabled {
+		if cred := getModuleConfig(user, "passkey"); cred != "" {
+			setModuleEnabled(user, "passkey", cred, true)
+		}
+	} else {
+		setModuleEnabled(user, "passkey", getModuleConfig(user, "passkey"), false)
 	}
 
 	store.mu.Lock()
@@ -555,7 +602,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	store.mu.Unlock()
 	saveStore()
 
-	fmt.Fprintf(w, "<html><head><link rel='stylesheet' href='/static/style.css'></head><body><h1>Settings Saved</h1><p>Your wellness ping is now active!</p><p>You'll receive check-ins at %d:00 %s (stored as %d:00 UTC)</p><p><a href='/settings'>Back to settings</a></p></body></html>", localHour, timezone, checkInHourUTC)
+	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
 func testPingHandler(w http.ResponseWriter, r *http.Request) {
@@ -939,6 +986,40 @@ func moduleConfig(u *User, moduleType string) string {
 	return ""
 }
 
+// getModuleConfig returns a module's config regardless of enabled state,
+// so disabling a module can keep its config for later re-enabling.
+func getModuleConfig(u *User, moduleType string) string {
+	for _, mod := range u.SecurityModules {
+		if mod.ModuleType == moduleType {
+			return mod.Config
+		}
+	}
+	return ""
+}
+
+// moduleConfigured reports whether a module has a real configuration stored,
+// independent of whether it is currently enabled.
+func moduleConfigured(u *User, moduleType string) bool {
+	switch moduleType {
+	case "totp":
+		var cfg TOTPConfig
+		if json.Unmarshal([]byte(getModuleConfig(u, moduleType)), &cfg) == nil {
+			return cfg.Secret != ""
+		}
+	case "passkey":
+		var cfg PasskeyConfig
+		if json.Unmarshal([]byte(getModuleConfig(u, moduleType)), &cfg) == nil {
+			return cfg.Credential != ""
+		}
+	case "pin":
+		var cfg PINConfig
+		if json.Unmarshal([]byte(getModuleConfig(u, moduleType)), &cfg) == nil {
+			return cfg.Pin != ""
+		}
+	}
+	return false
+}
+
 func modulePINConfig(u *User, field string) string {
 	if u == nil {
 		return ""
@@ -1054,46 +1135,6 @@ func totpVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
-func totpDisableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Redirect(w, r, "/settings", http.StatusSeeOther)
-		return
-	}
-	email, ok := requireSession(w, r)
-	if !ok {
-		return
-	}
-	user := requireUser(email, w)
-	if user == nil {
-		return
-	}
-	store.mu.Lock()
-	setModuleEnabled(user, "totp", "", false)
-	store.mu.Unlock()
-	saveStore()
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
-}
-
-func pinDisableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Redirect(w, r, "/settings", http.StatusSeeOther)
-		return
-	}
-	email, ok := requireSession(w, r)
-	if !ok {
-		return
-	}
-	user := requireUser(email, w)
-	if user == nil {
-		return
-	}
-	store.mu.Lock()
-	setModuleEnabled(user, "pin", "", false)
-	store.mu.Unlock()
-	saveStore()
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
-}
-
 func passkeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	email, ok := requireSession(w, r)
 	if !ok {
@@ -1165,26 +1206,6 @@ func passkeyRegisterFinish(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func passkeyDisableHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Redirect(w, r, "/settings", http.StatusSeeOther)
-		return
-	}
-	email, ok := requireSession(w, r)
-	if !ok {
-		return
-	}
-	user := requireUser(email, w)
-	if user == nil {
-		return
-	}
-	store.mu.Lock()
-	setModuleEnabled(user, "passkey", "", false)
-	store.mu.Unlock()
-	saveStore()
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
 // ---------------------------------------------------------------------------

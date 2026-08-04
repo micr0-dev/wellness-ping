@@ -110,6 +110,10 @@ button {
     padding: 6px 12px;
 }
 
+.danger {
+    color: light-dark(#b00020, #ff6b6b);
+}
+
 .qr-wrap {
     text-align: center;
     margin: 20px 0;
