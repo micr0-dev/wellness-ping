@@ -232,6 +232,10 @@ select {
     margin: 28px 0 0;
 }
 
+.confirm-note {
+    margin-top: 30px;
+}
+
 /* Spacing between stacked form widgets */
 form small {
     display: block;

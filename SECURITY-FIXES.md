@@ -1,8 +1,8 @@
-# v2.0 Security Fixes — task list
+# v2.0 Security Fixes - task list
 
 Status key: `[x]` done · `[ ]` pending
 
-## Critical — silent disarm of the switch
+## Critical - silent disarm of the switch
 
 - [x] **C1** Inbound email `From` trusted with no authentication → verify DKIM/SPF via
   Postmark `Authentication-Results`, require domain alignment, and require a
