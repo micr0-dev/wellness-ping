@@ -176,6 +176,9 @@ func unmarshalCredential(encoded string) (*webauthn.Credential, error) {
 
 // wauserFor builds a WAUser for a given user
 func wauserFor(u *User) *WAUser {
+	if u == nil {
+		return &WAUser{}
+	}
 	wu := &WAUser{
 		ID:          []byte(u.Email),
 		Name:        u.Email,
@@ -647,6 +650,9 @@ func testPingHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func enabledModules(u *User) []string {
+	if u == nil {
+		return nil
+	}
 	var out []string
 	for _, m := range moduleOrder {
 		if moduleEnabled(u, m) {
@@ -969,6 +975,9 @@ func passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func moduleEnabled(u *User, moduleType string) bool {
+	if u == nil {
+		return false
+	}
 	for _, mod := range u.SecurityModules {
 		if mod.ModuleType == moduleType && mod.Enabled {
 			return true
@@ -978,6 +987,9 @@ func moduleEnabled(u *User, moduleType string) bool {
 }
 
 func moduleConfig(u *User, moduleType string) string {
+	if u == nil {
+		return ""
+	}
 	for _, mod := range u.SecurityModules {
 		if mod.ModuleType == moduleType && mod.Enabled {
 			return mod.Config
@@ -989,6 +1001,9 @@ func moduleConfig(u *User, moduleType string) string {
 // getModuleConfig returns a module's config regardless of enabled state,
 // so disabling a module can keep its config for later re-enabling.
 func getModuleConfig(u *User, moduleType string) string {
+	if u == nil {
+		return ""
+	}
 	for _, mod := range u.SecurityModules {
 		if mod.ModuleType == moduleType {
 			return mod.Config
@@ -1000,6 +1015,9 @@ func getModuleConfig(u *User, moduleType string) string {
 // moduleConfigured reports whether a module has a real configuration stored,
 // independent of whether it is currently enabled.
 func moduleConfigured(u *User, moduleType string) bool {
+	if u == nil {
+		return false
+	}
 	switch moduleType {
 	case "totp":
 		var cfg TOTPConfig
@@ -1041,6 +1059,10 @@ func setModuleEnabled(u *User, moduleType string, config string, enabled bool) {
 			u.SecurityModules[i].CreatedAt = now
 			return
 		}
+	}
+	// Don't create an empty disabled placeholder module.
+	if config == "" && !enabled {
+		return
 	}
 	u.SecurityModules = append(u.SecurityModules, SecurityModule{
 		Enabled:    enabled,
