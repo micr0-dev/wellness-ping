@@ -33,7 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const VERSION = "2.0.3"
+const VERSION = "2.0.4"
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -511,6 +511,21 @@ var store = &Store{
 	Sessions:             make(map[string]*Session),
 }
 
+// serverStats tracks lightweight runtime stats for the self-service status
+// page (uptime + delivery counters + last errors).
+type serverStatsType struct {
+	sync.Mutex
+	started       time.Time
+	emailsSent    int
+	emailsFailed  int
+	signalSent    int
+	signalFailed  int
+	lastEmailErr  string
+	lastSignalErr string
+}
+
+var serverStats = serverStatsType{started: time.Now()}
+
 // CheckInFlow tracks which security modules have been authenticated for an
 // in-progress auth challenge, keyed by the flow token. It is used both for
 // check-ins ("/pong") and for signing into settings ("/login").
@@ -693,6 +708,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
+	mux.HandleFunc("/status", statusHandler)
 	mux.HandleFunc("/send-code", sendCodeHandler)
 	mux.HandleFunc("/dm-continue", dmContinueHandler)
 	mux.HandleFunc("/verify-code", verifyCodeHandler)
@@ -748,6 +764,128 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		"TurnstileSiteKey": os.Getenv("TURNSTILE_SITE_KEY"),
 	}
 	tmpl, err := template.ParseFiles("templates/index.html")
+	if err != nil {
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, data)
+}
+
+// statusPageService describes one subsystem shown on the status page.
+type statusPageService struct {
+	Name   string
+	Up     bool
+	Detail string
+}
+
+// formatUptime renders a duration as human-friendly text.
+func formatUptime(d time.Duration) string {
+	d = d.Round(time.Second)
+	days := int(d / (24 * time.Hour))
+	d -= time.Duration(days) * 24 * time.Hour
+	hours := int(d / time.Hour)
+	d -= time.Duration(hours) * time.Hour
+	mins := int(d / time.Minute)
+	d -= time.Duration(mins) * time.Minute
+	secs := int(d / time.Second)
+
+	parts := []string{}
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dd", days))
+	}
+	if hours > 0 || len(parts) > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+	}
+	if mins > 0 || len(parts) > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", mins))
+	}
+	parts = append(parts, fmt.Sprintf("%ds", secs))
+	return strings.Join(parts, " ")
+}
+
+// statusHandler renders a simple self-service status page: uptime since the
+// server started plus which subsystems are reachable/configured.
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+	serverStats.Lock()
+	s := struct {
+		Uptime       string
+		EmailsSent   int
+		EmailsFailed int
+		SignalSent   int
+		SignalFailed int
+		LastEmailErr string
+		LastSignalErr string
+	}{Uptime: formatUptime(time.Since(serverStats.started))}
+	s.EmailsSent = serverStats.emailsSent
+	s.EmailsFailed = serverStats.emailsFailed
+	s.SignalSent = serverStats.signalSent
+	s.SignalFailed = serverStats.signalFailed
+	s.LastEmailErr = serverStats.lastEmailErr
+	s.LastSignalErr = serverStats.lastSignalErr
+	serverStats.Unlock()
+
+	store.mu.RLock()
+	users := len(store.Users)
+	active := 0
+	for _, u := range store.Users {
+		if u != nil && u.Active {
+			active++
+		}
+	}
+	store.mu.RUnlock()
+
+	services := []statusPageService{
+		{Name: "Web server", Up: true, Detail: "uptime " + s.Uptime},
+	}
+
+	if os.Getenv("POSTMARK_TOKEN") != "" {
+		if s.LastEmailErr == "" {
+			services = append(services, statusPageService{Name: "Email (Postmark)", Up: true, Detail: "outbound mail configured"})
+		} else {
+			services = append(services, statusPageService{Name: "Email (Postmark)", Up: false, Detail: s.LastEmailErr})
+		}
+	} else {
+		services = append(services, statusPageService{Name: "Email (Postmark)", Up: false, Detail: "not configured"})
+	}
+
+	signalDetail := signal.Message
+	if signalDetail == "" {
+		signalDetail = "not configured"
+	}
+	services = append(services, statusPageService{Name: "Signal (signal-cli)", Up: signal.Ready, Detail: signalDetail})
+
+	if os.Getenv("TURNSTILE_SECRET_KEY") != "" {
+		services = append(services, statusPageService{Name: "Signup protection (Turnstile)", Up: true, Detail: "configured"})
+	} else {
+		services = append(services, statusPageService{Name: "Signup protection (Turnstile)", Up: false, Detail: "not configured"})
+	}
+
+	if os.Getenv("INBOUND_SECRET") != "" {
+		services = append(services, statusPageService{Name: "Inbound email", Up: true, Detail: "configured"})
+	} else {
+		services = append(services, statusPageService{Name: "Inbound email", Up: false, Detail: "not configured"})
+	}
+
+	if webAuthn != nil {
+		services = append(services, statusPageService{Name: "Passkeys (WebAuthn)", Up: true, Detail: "configured"})
+	} else {
+		services = append(services, statusPageService{Name: "Passkeys (WebAuthn)", Up: false, Detail: "not configured"})
+	}
+
+	data := map[string]interface{}{
+		"Version":       VERSION,
+		"Uptime":        s.Uptime,
+		"Services":      services,
+		"Users":         users,
+		"ActiveUsers":   active,
+		"EmailsSent":    s.EmailsSent,
+		"EmailsFailed":  s.EmailsFailed,
+		"SignalSent":    s.SignalSent,
+		"SignalFailed":  s.SignalFailed,
+		"LastEmailErr":  s.LastEmailErr,
+		"LastSignalErr": s.LastSignalErr,
+	}
+	tmpl, err := template.ParseFiles("templates/status.html")
 	if err != nil {
 		http.Error(w, "Template error", http.StatusInternalServerError)
 		return
@@ -950,8 +1088,23 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		"TOTPConfigured":    moduleConfigured(user, "totp"),
 		"PasskeyConfigured": moduleConfigured(user, "passkey"),
 		"PinConfigured":     moduleConfigured(user, "pin"),
+		"OnlySelfContact":   false,
 	}
 	if user != nil {
+		// Flag when the user has only added themselves as the emergency
+		// contact - that's a valid choice, but worth a nudge so they know for
+		// sure that no one else will be alerted.
+		if len(user.AlertEmails) > 0 {
+			onlySelf := true
+			for _, c := range user.AlertEmails {
+				_, canon := classifyContact(c)
+				if canon != email {
+					onlySelf = false
+					break
+				}
+			}
+			data["OnlySelfContact"] = onlySelf
+		}
 		// Surface per-contact delivery outcomes so an emergency contact that
 		// silently bounces is visible here, not only in the server log.
 		statuses := make([]map[string]string, 0, len(user.AlertEmails))
@@ -2698,7 +2851,20 @@ func plainToHTML(text string) string {
 
 // postmarkSend posts a single message. Returns an error so callers can record
 // a delivery status instead of only logging one.
-func postmarkSend(payload map[string]interface{}, to string) error {
+func postmarkSend(payload map[string]interface{}, to string) (err error) {
+	// Track delivery outcome for the status page regardless of which return
+	// point we hit.
+	defer func() {
+		serverStats.Lock()
+		if err != nil {
+			serverStats.emailsFailed++
+			serverStats.lastEmailErr = err.Error()
+		} else {
+			serverStats.emailsSent++
+		}
+		serverStats.Unlock()
+	}()
+
 	token := os.Getenv("POSTMARK_TOKEN")
 	if token == "" {
 		log.Printf("POSTMARK_TOKEN not set; would send to %s subject %q", to, payload["Subject"])
@@ -2992,13 +3158,24 @@ func classifyContact(raw string) (kind, canonical string) {
 
 // signalSendRaw delivers a message to a direct recipient argument: a Signal
 // username (u:...), an E.164 phone number, or a resolved ACI UUID.
-func signalSendRaw(recArg, body string) error {
+func signalSendRaw(recArg, body string) (err error) {
+	defer func() {
+		serverStats.Lock()
+		if err != nil {
+			serverStats.signalFailed++
+			serverStats.lastSignalErr = err.Error()
+		} else {
+			serverStats.signalSent++
+		}
+		serverStats.Unlock()
+	}()
+
 	if !signal.Ready {
 		return fmt.Errorf("Signal is not ready")
 	}
-	out, err := runSignalCLI(60*time.Second, body, "send", "--message-from-stdin", recArg)
-	if err != nil {
-		return fmt.Errorf("signal-cli send failed: %v: %s", err, strings.TrimSpace(string(out)))
+	out, runErr := runSignalCLI(60*time.Second, body, "send", "--message-from-stdin", recArg)
+	if runErr != nil {
+		return fmt.Errorf("signal-cli send failed: %v: %s", runErr, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

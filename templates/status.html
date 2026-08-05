@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Status - Wellness Ping</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <h1>Wellness Ping Status</h1>
+    <p>Server uptime: <strong>{{.Uptime}}</strong></p>
+
+    <h3>Services</h3>
+    <ul>
+        {{range .Services}}
+        <li>
+            <span class="{{if .Up}}ok status-dot{{else}}off status-dot{{end}}">{{if .Up}}up{{else}}down{{end}}</span>
+            <strong>{{.Name}}</strong> - {{.Detail}}
+        </li>
+        {{end}}
+    </ul>
+
+    <h3>Stats</h3>
+    <ul>
+        <li>Registered accounts: {{.Users}} ({{.ActiveUsers}} active)</li>
+        <li>Emails sent: {{.EmailsSent}} ({{.EmailsFailed}} failed)</li>
+        <li>Signal messages sent: {{.SignalSent}} ({{.SignalFailed}} failed)</li>
+    </ul>
+
+    <p class="back-link"><a href="/">Back to home</a></p>
+
+    <footer>Version: <span class="version">{{.Version}}</span></footer>
+    <script src="/static/version.js"></script>
+</body>
+
+</html>
