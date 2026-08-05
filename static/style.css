@@ -95,6 +95,11 @@ code {
     color: var(--muted);
 }
 
+.status-dot {
+    font-weight: 600;
+    margin-right: 8px;
+}
+
 .danger {
     color: var(--danger);
 }
@@ -233,6 +238,10 @@ select {
 }
 
 .confirm-note {
+    margin-top: 30px;
+}
+
+.btn-gap {
     margin-top: 30px;
 }
 

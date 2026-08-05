@@ -33,7 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const VERSION = "2.0.3"
+const VERSION = "2.0.4"
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -511,6 +511,21 @@ var store = &Store{
 	Sessions:             make(map[string]*Session),
 }
 
+// serverStats tracks lightweight runtime stats for the self-service status
+// page (uptime + delivery counters + last errors).
+type serverStatsType struct {
+	sync.Mutex
+	started       time.Time
+	emailsSent    int
+	emailsFailed  int
+	signalSent    int
+	signalFailed  int
+	lastEmailErr  string
+	lastSignalErr string
+}
+
+var serverStats = serverStatsType{started: time.Now()}
+
 // CheckInFlow tracks which security modules have been authenticated for an
 // in-progress auth challenge, keyed by the flow token. It is used both for
 // check-ins ("/pong") and for signing into settings ("/login").
@@ -693,6 +708,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
+	mux.HandleFunc("/status", statusHandler)
 	mux.HandleFunc("/send-code", sendCodeHandler)
 	mux.HandleFunc("/dm-continue", dmContinueHandler)
 	mux.HandleFunc("/verify-code", verifyCodeHandler)
@@ -717,6 +733,7 @@ func main() {
 
 	go pingScheduler()
 	go signalReceiveLoop()
+	refreshStatusSnapshot()
 
 	addr := fmt.Sprintf(":%d", *port)
 	srv := &http.Server{
@@ -748,6 +765,192 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		"TurnstileSiteKey": os.Getenv("TURNSTILE_SITE_KEY"),
 	}
 	tmpl, err := template.ParseFiles("templates/index.html")
+	if err != nil {
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, data)
+}
+
+// statusPageService describes one subsystem shown on the status page.
+type statusPageService struct {
+	Name   string
+	Up     bool
+	Detail string
+}
+
+// formatUptime renders a duration as human-friendly text.
+func formatUptime(d time.Duration) string {
+	d = d.Round(time.Second)
+	days := int(d / (24 * time.Hour))
+	d -= time.Duration(days) * 24 * time.Hour
+	hours := int(d / time.Hour)
+	d -= time.Duration(hours) * time.Hour
+	mins := int(d / time.Minute)
+	d -= time.Duration(mins) * time.Minute
+	secs := int(d / time.Second)
+
+	parts := []string{}
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%dd", days))
+	}
+	if hours > 0 || len(parts) > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+	}
+	if mins > 0 || len(parts) > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", mins))
+	}
+	parts = append(parts, fmt.Sprintf("%ds", secs))
+	return strings.Join(parts, " ")
+}
+
+// deliveryEvent records a single delivery attempt (email or Signal) so the
+// status page can show a rolling success rate over the last 24h.
+type deliveryEvent struct {
+	ok bool
+	ts time.Time
+}
+
+var (
+	emailEvents = struct {
+		sync.Mutex
+		ev []deliveryEvent
+	}{}
+	signalEvents = struct {
+		sync.Mutex
+		ev []deliveryEvent
+	}{}
+)
+
+// statusSnapshot is the cached, precomputed state the /status page renders.
+// The scheduler refreshes it; the page never computes anything on request.
+type statusSnapshot struct {
+	Uptime      string
+	Services    []statusPageService
+	Users       int
+	ActiveUsers int
+}
+
+var cachedStatus = struct {
+	sync.RWMutex
+	s *statusSnapshot
+}{}
+
+// deliveryRate counts total and successful deliveries within the last 24h.
+func deliveryRate(events []deliveryEvent, cutoff time.Time) (total, ok int) {
+	for _, e := range events {
+		if e.ts.After(cutoff) {
+			total++
+			if e.ok {
+				ok++
+			}
+		}
+	}
+	return
+}
+
+// deliverySummary builds the "healthy/degraded/down x.x% delivered (last 24h)"
+// line for a channel, or "not configured"/"no data" where appropriate.
+func deliverySummary(configured bool, events []deliveryEvent) (up bool, detail string) {
+	if !configured {
+		return false, "not configured"
+	}
+	total, ok := deliveryRate(events, time.Now().Add(-24*time.Hour))
+	if total == 0 {
+		return true, "no deliveries in the last 24h"
+	}
+	pct := float64(ok) / float64(total) * 100
+	word, up := "healthy", true
+	switch {
+	case pct < 70:
+		word, up = "down", false
+	case pct < 98:
+		word = "degraded"
+	}
+	return up, fmt.Sprintf("%s %.1f%% delivered (last 24h)", word, pct)
+}
+
+// refreshStatusSnapshot recomputes the cached status data. Called once at
+// startup and then by the scheduler once a minute, never per request.
+func refreshStatusSnapshot() {
+	serverStats.Lock()
+	uptime := formatUptime(time.Since(serverStats.started))
+	serverStats.Unlock()
+
+	emailEvents.Lock()
+	emailEv := append([]deliveryEvent(nil), emailEvents.ev...)
+	emailEvents.Unlock()
+	signalEvents.Lock()
+	signalEv := append([]deliveryEvent(nil), signalEvents.ev...)
+	signalEvents.Unlock()
+
+	emailUp, emailDetail := deliverySummary(os.Getenv("POSTMARK_TOKEN") != "", emailEv)
+	signalUp, signalDetail := deliverySummary(signal.Ready, signalEv)
+
+	services := []statusPageService{
+		{Name: "Web server", Up: true, Detail: "uptime " + uptime},
+		{Name: "Email", Up: emailUp, Detail: emailDetail},
+		{Name: "Signal", Up: signalUp, Detail: signalDetail},
+	}
+
+	appendCfg := func(name string, configured bool) {
+		srv := statusPageService{Name: name, Up: configured}
+		if configured {
+			srv.Detail = "configured"
+		} else {
+			srv.Detail = "not configured"
+		}
+		services = append(services, srv)
+	}
+	appendCfg("Signup protection (Turnstile)", os.Getenv("TURNSTILE_SECRET_KEY") != "")
+	appendCfg("Inbound email", os.Getenv("INBOUND_SECRET") != "")
+	appendCfg("Passkeys (WebAuthn)", webAuthn != nil)
+
+	store.mu.RLock()
+	users := len(store.Users)
+	active := 0
+	for _, u := range store.Users {
+		if u != nil && u.Active {
+			active++
+		}
+	}
+	store.mu.RUnlock()
+
+	cachedStatus.Lock()
+	cachedStatus.s = &statusSnapshot{
+		Uptime:      uptime,
+		Services:    services,
+		Users:       users,
+		ActiveUsers: active,
+	}
+	cachedStatus.Unlock()
+}
+
+// statusHandler renders the cached, scheduler-produced status snapshot. It
+// never recomputes anything per request and tells caches not to store it.
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+
+	cachedStatus.RLock()
+	snap := cachedStatus.s
+	cachedStatus.RUnlock()
+
+	data := map[string]interface{}{
+		"Version":     VERSION,
+		"Uptime":      "",
+		"Services":    []statusPageService{},
+		"Users":       0,
+		"ActiveUsers": 0,
+	}
+	if snap != nil {
+		data["Uptime"] = snap.Uptime
+		data["Services"] = snap.Services
+		data["Users"] = snap.Users
+		data["ActiveUsers"] = snap.ActiveUsers
+	}
+
+	tmpl, err := template.ParseFiles("templates/status.html")
 	if err != nil {
 		http.Error(w, "Template error", http.StatusInternalServerError)
 		return
@@ -950,8 +1153,23 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		"TOTPConfigured":    moduleConfigured(user, "totp"),
 		"PasskeyConfigured": moduleConfigured(user, "passkey"),
 		"PinConfigured":     moduleConfigured(user, "pin"),
+		"OnlySelfContact":   false,
 	}
 	if user != nil {
+		// Flag when the user has only added themselves as the emergency
+		// contact - that's a valid choice, but worth a nudge so they know for
+		// sure that no one else will be alerted.
+		if len(user.AlertEmails) > 0 {
+			onlySelf := true
+			for _, c := range user.AlertEmails {
+				_, canon := classifyContact(c)
+				if canon != email {
+					onlySelf = false
+					break
+				}
+			}
+			data["OnlySelfContact"] = onlySelf
+		}
 		// Surface per-contact delivery outcomes so an emergency contact that
 		// silently bounces is visible here, not only in the server log.
 		statuses := make([]map[string]string, 0, len(user.AlertEmails))
@@ -2698,7 +2916,24 @@ func plainToHTML(text string) string {
 
 // postmarkSend posts a single message. Returns an error so callers can record
 // a delivery status instead of only logging one.
-func postmarkSend(payload map[string]interface{}, to string) error {
+func postmarkSend(payload map[string]interface{}, to string) (err error) {
+	// Track delivery outcome for the status page regardless of which return
+	// point we hit.
+	defer func() {
+		serverStats.Lock()
+		if err != nil {
+			serverStats.emailsFailed++
+			serverStats.lastEmailErr = err.Error()
+		} else {
+			serverStats.emailsSent++
+		}
+		serverStats.Unlock()
+
+		emailEvents.Lock()
+		emailEvents.ev = append(emailEvents.ev, deliveryEvent{ok: err == nil, ts: time.Now()})
+		emailEvents.Unlock()
+	}()
+
 	token := os.Getenv("POSTMARK_TOKEN")
 	if token == "" {
 		log.Printf("POSTMARK_TOKEN not set; would send to %s subject %q", to, payload["Subject"])
@@ -2992,13 +3227,28 @@ func classifyContact(raw string) (kind, canonical string) {
 
 // signalSendRaw delivers a message to a direct recipient argument: a Signal
 // username (u:...), an E.164 phone number, or a resolved ACI UUID.
-func signalSendRaw(recArg, body string) error {
+func signalSendRaw(recArg, body string) (err error) {
+	defer func() {
+		serverStats.Lock()
+		if err != nil {
+			serverStats.signalFailed++
+			serverStats.lastSignalErr = err.Error()
+		} else {
+			serverStats.signalSent++
+		}
+		serverStats.Unlock()
+
+		signalEvents.Lock()
+		signalEvents.ev = append(signalEvents.ev, deliveryEvent{ok: err == nil, ts: time.Now()})
+		signalEvents.Unlock()
+	}()
+
 	if !signal.Ready {
 		return fmt.Errorf("Signal is not ready")
 	}
-	out, err := runSignalCLI(60*time.Second, body, "send", "--message-from-stdin", recArg)
-	if err != nil {
-		return fmt.Errorf("signal-cli send failed: %v: %s", err, strings.TrimSpace(string(out)))
+	out, runErr := runSignalCLI(60*time.Second, body, "send", "--message-from-stdin", recArg)
+	if runErr != nil {
+		return fmt.Errorf("signal-cli send failed: %v: %s", runErr, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -3725,6 +3975,10 @@ func runSchedulerTick() {
 			log.Printf("ERROR: panic in scheduler tick: %v", rec)
 		}
 	}()
+
+	// Refresh the status page snapshot (uptime, service health, rolling
+	// delivery rates) so it is never computed on request.
+	refreshStatusSnapshot()
 
 	now := time.Now()
 	needsSave := housekeeping(now)

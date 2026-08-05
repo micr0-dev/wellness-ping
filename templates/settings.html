@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
 </head>
 
 <body>
@@ -50,6 +50,14 @@
         <label for="alert_emails">Alert Contacts (comma-separated email / Signal username / phone)</label>
         <input type="text" id="alert_emails" name="alert_emails" placeholder="friend@email.com, name.01, +14155551234" value="{{if .User}}{{range $i, $e := .User.AlertEmails}}{{if $i}}, {{end}}{{$e}}{{end}}{{end}}" required>
         <small class="muted">Phone numbers and Signal usernames are messaged through each contact's Signal account, not SMS.</small>
+
+        {{if .OnlySelfContact}}
+        <div class="raised">
+            <p class="note"><strong>Heads-up:</strong> the only emergency contact on this
+            account is yourself. That's a fine choice if that's what you want, but just so
+            you know for sure: if you ever stop checking in, no one else will be alerted.</p>
+        </div>
+        {{end}}
 
         <label for="ping_frequency">Ping Frequency</label>
         <select id="ping_frequency" name="ping_frequency">
@@ -196,14 +204,15 @@
 
     <footer>
         Open source on <a href="https://github.com/micr0-dev/wellness-ping">GitHub</a> |
+        <a href="/status">Status</a> |
         Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or irc.micr0.dev:6667/6697 |
         Version: <span class="version">{{.Version}}</span>
         <div class="footer-privacy">Privacy: We only store your contact identifier, alert contacts, and last check-in time. No logs, no tracking.
         Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.</div>
     </footer>
 
-    <script src="/static/webauthn.js"></script>
-    <script src="/static/settings.js"></script>
-    <script src="/static/version.js"></script>
+    <script src="/static/webauthn.js?v={{.Version}}"></script>
+    <script src="/static/settings.js?v={{.Version}}"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 </body>
 </html>

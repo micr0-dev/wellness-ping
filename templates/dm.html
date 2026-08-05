@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Message the Bot - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
 </head>
 
 <body>
@@ -21,7 +21,7 @@
 
     <form action="/dm-continue" method="POST">
         <input type="hidden" name="identifier" value="{{.Email}}">
-        <button type="submit">I've sent the message - continue</button>
+        <button type="submit" class="btn-gap">I've sent the message - continue</button>
     </form>
 
     <p class="note">This confirms you're a real Signal account and lets us reply
@@ -31,7 +31,7 @@
     <p class="back-link"><a href="/">Cancel</a></p>
 
     <footer>Version: <span class="version">{{.Version}}</span></footer>
-    <script src="/static/version.js"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 </body>
 
 </html>

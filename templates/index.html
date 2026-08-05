@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 
@@ -70,9 +70,10 @@
     <footer>
         Questions? Want to chat? Join us at <a href="https://chat.micr0.dev">chat.micr0.dev</a> or irc.micr0.dev:6667/6697 |
         <a href="https://github.com/micr0-dev/wellness-ping">View source on GitHub</a> |
+        <a href="/status">Status</a> |
         Version: <span class="version">{{.Version}}</span>
     </footer>
-    <script src="/static/version.js"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 </body>
 
 </html>
