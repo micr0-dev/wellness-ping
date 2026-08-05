@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Confirm - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
 </head>
 
 <body>
@@ -18,10 +18,10 @@
 
     <footer>Version: <span class="version">{{.Version}}</span></footer>
 
-    <script src="/static/version.js"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 
-    <script src="/static/webauthn.js"></script>
-    <script src="/static/passkey-login.js"></script>
+    <script src="/static/webauthn.js?v={{.Version}}"></script>
+    <script src="/static/passkey-login.js?v={{.Version}}"></script>
 </body>
 
 </html>

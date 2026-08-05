@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
 </head>
 
 <body>
@@ -211,8 +211,8 @@
         Server hosted in Sweden with full disk encryption. Stopping service deletes all your data.</div>
     </footer>
 
-    <script src="/static/webauthn.js"></script>
-    <script src="/static/settings.js"></script>
-    <script src="/static/version.js"></script>
+    <script src="/static/webauthn.js?v={{.Version}}"></script>
+    <script src="/static/settings.js?v={{.Version}}"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 </body>
 </html>

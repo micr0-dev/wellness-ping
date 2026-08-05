@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Setup Authenticator App - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
 </head>
 
 <body>
@@ -34,7 +34,7 @@
         Version: <span class="version">{{.Version}}</span> |
         <a href="/settings">Back to Settings</a>
     </footer>
-    <script src="/static/version.js"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 </body>
 
 </html>

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Confirm - Wellness Ping</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{.Version}}">
 </head>
 
 <body>
@@ -22,7 +22,7 @@
     <p><a href="/">Back to home</a></p>
 
     <footer>Version: <span class="version">{{.Version}}</span></footer>
-    <script src="/static/version.js"></script>
+    <script src="/static/version.js?v={{.Version}}"></script>
 </body>
 
 </html>
