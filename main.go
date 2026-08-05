@@ -33,7 +33,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const VERSION = "2.0.4"
+const VERSION = "2.0.5"
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -805,11 +805,20 @@ func formatUptime(d time.Duration) string {
 }
 
 // deliveryEvent records a single delivery attempt (email or Signal) so the
-// status page can show a rolling success rate over the last 24h.
+// status page can show separate rolling success rates over the last 24h for
+// the signup/verification path vs the actual check-in/alert path. A signup
+// outage is a very different level of issue from the check-in system being
+// down, so they are tracked independently.
 type deliveryEvent struct {
-	ok bool
-	ts time.Time
+	ok   bool
+	ts   time.Time
+	kind string // deliverySignup or deliveryCheckin
 }
+
+const (
+	deliverySignup  = "signup"
+	deliveryCheckin = "checkin"
+)
 
 var (
 	emailEvents = struct {
@@ -836,10 +845,11 @@ var cachedStatus = struct {
 	s *statusSnapshot
 }{}
 
-// deliveryRate counts total and successful deliveries within the last 24h.
-func deliveryRate(events []deliveryEvent, cutoff time.Time) (total, ok int) {
+// deliveryRate counts total and successful deliveries of a given kind within
+// the last 24h.
+func deliveryRate(events []deliveryEvent, cutoff time.Time, kind string) (total, ok int) {
 	for _, e := range events {
-		if e.ts.After(cutoff) {
+		if e.kind == kind && e.ts.After(cutoff) {
 			total++
 			if e.ok {
 				ok++
@@ -850,12 +860,13 @@ func deliveryRate(events []deliveryEvent, cutoff time.Time) (total, ok int) {
 }
 
 // deliverySummary builds the "healthy/degraded/down x.x% delivered (last 24h)"
-// line for a channel, or "not configured"/"no data" where appropriate.
-func deliverySummary(configured bool, events []deliveryEvent) (up bool, detail string) {
+// line for a channel + kind (signup/checkin), or "not configured"/"no data"
+// where appropriate.
+func deliverySummary(configured bool, events []deliveryEvent, kind string) (up bool, detail string) {
 	if !configured {
 		return false, "not configured"
 	}
-	total, ok := deliveryRate(events, time.Now().Add(-24*time.Hour))
+	total, ok := deliveryRate(events, time.Now().Add(-24*time.Hour), kind)
 	if total == 0 {
 		return true, "no deliveries in the last 24h"
 	}
@@ -884,13 +895,18 @@ func refreshStatusSnapshot() {
 	signalEv := append([]deliveryEvent(nil), signalEvents.ev...)
 	signalEvents.Unlock()
 
-	emailUp, emailDetail := deliverySummary(os.Getenv("POSTMARK_TOKEN") != "", emailEv)
-	signalUp, signalDetail := deliverySummary(signal.Ready, signalEv)
+	emailCfg := os.Getenv("POSTMARK_TOKEN") != ""
+	emailSignupUp, emailSignupDetail := deliverySummary(emailCfg, emailEv, deliverySignup)
+	emailCheckinUp, emailCheckinDetail := deliverySummary(emailCfg, emailEv, deliveryCheckin)
+	signalSignupUp, signalSignupDetail := deliverySummary(signal.Ready, signalEv, deliverySignup)
+	signalCheckinUp, signalCheckinDetail := deliverySummary(signal.Ready, signalEv, deliveryCheckin)
 
 	services := []statusPageService{
 		{Name: "Web server", Up: true, Detail: "uptime " + uptime},
-		{Name: "Email", Up: emailUp, Detail: emailDetail},
-		{Name: "Signal", Up: signalUp, Detail: signalDetail},
+		{Name: "Email (signup)", Up: emailSignupUp, Detail: emailSignupDetail},
+		{Name: "Email (check-in)", Up: emailCheckinUp, Detail: emailCheckinDetail},
+		{Name: "Signal (signup)", Up: signalSignupUp, Detail: signalSignupDetail},
+		{Name: "Signal (check-in)", Up: signalCheckinUp, Detail: signalCheckinDetail},
 	}
 
 	appendCfg := func(name string, configured bool) {
@@ -1004,7 +1020,7 @@ func sendCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 		subject := "Wellness Ping Verification Code"
 		body := fmt.Sprintf("Your Verification Code is: %s\n\nThis code expires in 10 minutes.", code)
-		sendEmail(canonical, subject, body)
+		sendEmail(canonical, subject, body, deliverySignup)
 
 		renderTemplate(w, "templates/verify.html", map[string]interface{}{"Email": canonical, "ViaSignal": false})
 		return
@@ -2916,7 +2932,7 @@ func plainToHTML(text string) string {
 
 // postmarkSend posts a single message. Returns an error so callers can record
 // a delivery status instead of only logging one.
-func postmarkSend(payload map[string]interface{}, to string) (err error) {
+func postmarkSend(payload map[string]interface{}, to, kind string) (err error) {
 	// Track delivery outcome for the status page regardless of which return
 	// point we hit.
 	defer func() {
@@ -2930,7 +2946,7 @@ func postmarkSend(payload map[string]interface{}, to string) (err error) {
 		serverStats.Unlock()
 
 		emailEvents.Lock()
-		emailEvents.ev = append(emailEvents.ev, deliveryEvent{ok: err == nil, ts: time.Now()})
+		emailEvents.ev = append(emailEvents.ev, deliveryEvent{ok: err == nil, ts: time.Now(), kind: kind})
 		emailEvents.Unlock()
 	}()
 
@@ -2967,7 +2983,7 @@ func postmarkSend(payload map[string]interface{}, to string) (err error) {
 	return nil
 }
 
-func sendEmail(to, subject, body string) error {
+func sendEmail(to, subject, body, kind string) error {
 	return postmarkSend(map[string]interface{}{
 		"From":          senderAddress(),
 		"To":            to,
@@ -2975,7 +2991,7 @@ func sendEmail(to, subject, body string) error {
 		"TextBody":      body,
 		"HtmlBody":      plainToHTML(body),
 		"MessageStream": "outbound",
-	}, to)
+	}, to, kind)
 }
 
 func senderAddress() string {
@@ -3044,7 +3060,7 @@ func sendReplyEmail(to, inReplyTo, originalSubject, originalBody string) {
 		payload["Headers"] = hdrs
 	}
 
-	if err := postmarkSend(payload, to); err != nil {
+	if err := postmarkSend(payload, to, deliveryCheckin); err != nil {
 		log.Printf("WARNING: could not send reply acknowledgement to %s: %v", to, err)
 	}
 }
@@ -3227,7 +3243,7 @@ func classifyContact(raw string) (kind, canonical string) {
 
 // signalSendRaw delivers a message to a direct recipient argument: a Signal
 // username (u:...), an E.164 phone number, or a resolved ACI UUID.
-func signalSendRaw(recArg, body string) (err error) {
+func signalSendRaw(recArg, body, kind string) (err error) {
 	defer func() {
 		serverStats.Lock()
 		if err != nil {
@@ -3239,7 +3255,7 @@ func signalSendRaw(recArg, body string) (err error) {
 		serverStats.Unlock()
 
 		signalEvents.Lock()
-		signalEvents.ev = append(signalEvents.ev, deliveryEvent{ok: err == nil, ts: time.Now()})
+		signalEvents.ev = append(signalEvents.ev, deliveryEvent{ok: err == nil, ts: time.Now(), kind: kind})
 		signalEvents.Unlock()
 	}()
 
@@ -3267,7 +3283,7 @@ func sendVerificationCodeSignal(contact, code string) bool {
 	}
 	recArg := signalSendTarget(contact, uuid)
 
-	err := signalSendRaw(recArg, fmt.Sprintf("Your Wellness Ping Verification Code is: %s\n\nThis code expires in 10 minutes.", code))
+	err := signalSendRaw(recArg, fmt.Sprintf("Your Wellness Ping Verification Code is: %s\n\nThis code expires in 10 minutes.", code), deliverySignup)
 	if err != nil {
 		log.Printf("WARNING: could not send verification code to %s via Signal: %v", contact, err)
 	}
@@ -3597,7 +3613,7 @@ func sendToContact(user userSnapshot, contact, subject, body string) {
 	var err error
 	switch kind {
 	case "email":
-		err = sendEmail(contact, subject, body)
+		err = sendEmail(contact, subject, body, deliveryCheckin)
 	case "signal", "phone":
 		err = sendViaSignal(user, contact, subject+"\n\n"+body)
 	default:
@@ -3629,7 +3645,7 @@ func sendViaSignal(user userSnapshot, contact, msg string) error {
 			}
 		}
 	}
-	return signalSendRaw(signalSendTarget(contact, uuid), msg)
+	return signalSendRaw(signalSendTarget(contact, uuid), msg, deliveryCheckin)
 }
 
 func generateCode() string {
