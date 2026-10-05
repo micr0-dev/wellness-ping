@@ -6,8 +6,4 @@ A simple dead man's switch service. Get pinged regularly to confirm you're okay.
 
 ## Support / Community
 
-Questions? Want to chat? Join us at [chat.micr0.dev](https://chat.micr0.dev)
-
-Channels: #dev for project discussion, #help for support
-
-IRC: irc.micr0.dev (ports 6667/6697)
+Questions? Want to chat? Join us on [Signal](https://signal.group/#CjQKIM_EtSC_D792V7qgxpQG2wDuSWSC6ON7NlBnrTYChxSYEhATBDp49lvA9Pz2NZKmCiQO)
